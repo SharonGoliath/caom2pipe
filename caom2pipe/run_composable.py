@@ -189,6 +189,9 @@ class TodoRunner:
             self._logger.info(f'Cleanup failed for {entry} with {e}')
             self._logger.debug(traceback.format_exc())
             result = -1
+        if result == 0:
+            # otherwise the metadata may still be required for retries
+            self._metadata_reader.unset(storage_name)
         self._logger.debug(f'End _process_entry with result {result}.')
         return result
 

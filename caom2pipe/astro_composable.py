@@ -96,6 +96,7 @@ from caom2pipe import manage_composable as mc
 
 
 __all__ = [
+    'add_as_s',
     'build_chunk_energy_bounds',
     'build_plane_time',
     'build_plane_time_interval',
@@ -119,6 +120,12 @@ __all__ = [
 ]
 
 SVO_URL = 'http://svo2.cab.inta-csic.es/svo/theory/fps3/fps.php?ID='
+
+
+def add_as_s(these_s, to_this_mjd):
+    mjd = Time(to_this_mjd, format='mjd', scale='utc')
+    result = mjd + these_s * units.second
+    return result.value
 
 
 def find_time_bounds(headers):

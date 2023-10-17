@@ -78,6 +78,7 @@ from caom2 import ValueCoord2D, Algorithm, Artifact, Part, TemporalWCS
 from caom2 import Instrument, TypedOrderedDict, SimpleObservation, CoordError
 from caom2 import CoordFunction1D, DerivedObservation, Provenance
 from caom2 import CoordBounds1D, TypedList, ProductType
+from caom2.caom_util import URISet
 from caom2.diff import get_differences
 from caom2utils import ObsBlueprint, BlueprintParser, FitsParser
 from caom2utils import update_artifact_meta, Caom2Exception
@@ -1077,7 +1078,6 @@ class TelescopeMapping:
         self._clients = clients
         self._observable = observable
         self._observation = observation
-        from caom2.caom_util import URISet
         self._meta_read_groups = URISet()
         self._data_read_groups = URISet()
         self._init_read_groups(config)
@@ -1146,7 +1146,7 @@ class TelescopeMapping:
         :param artifact: Artifact instance
         :return:
         """
-        return
+        raise NotImplementedError
 
     def _update_plane(self, plane):
         self._update_groups(plane.data_read_groups, self._data_read_groups)
@@ -1249,5 +1249,5 @@ class Fits2caom2Visitor:
             )
             self._observation = None
 
-        self._logger.debug(f'End visit')
+        self._logger.debug('End visit')
         return self._observation
