@@ -265,4 +265,3 @@ class HttpDataSource(IncrementalDataSource):
                     self._logger.debug(f'skipping {dt_str_bits}')
         self._logger.debug(f'End _parse_html_string from {node.tag} with {node.data.fn.__name__}')
         return result
-
