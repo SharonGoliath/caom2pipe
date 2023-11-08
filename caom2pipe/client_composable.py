@@ -362,10 +362,11 @@ def get_cadc_meta_client_v(storage_name, cadc_client):
     return FileMeta(f_size, f_md5sum)
 
 
-def query_tap_client(query_string, tap_client):
+def query_tap_client(query_string, tap_client, timeout=10):
     """
     :param query_string ADQL
     :param tap_client which client to query the service with
+    :param timeout int value of minutes to wait for a query to complete
     :returns an astropy votable instance."""
 
     logging.debug(f'query_tap_client: execute query \n{query_string}')
@@ -374,9 +375,10 @@ def query_tap_client(query_string, tap_client):
         query_string,
         output_file=buffer,
         data_only=True,
-        response_format='csv',
+        response_format='tsv',
+        timeout=timeout,
     )
-    return Table.read(buffer.getvalue().split('\n'), format='csv')
+    return Table.read(buffer.getvalue().split('\n'), format='ascii.tab')
 
 
 def repo_create(client, observation, metrics):

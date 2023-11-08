@@ -691,7 +691,7 @@ def run_single(
     :param metadata_reader MetadataReader instance
     """
     logging.debug(f'Begin run_single {config.work_fqn}')
-    observable = mc.Observable(mc.Rejected(config.rejected_fqn), mc.Metrics(config))
+    observable = mc.Observable(config)
     reporter = mc.ExecutionReporter(config, observable)
     reporter.set_log_location(config)
     clients = cc.ClientCollection(config)

@@ -763,7 +763,7 @@ def get_obs_id_from_cadc(artifact_uri, tap_client):
     """
     logging.debug(f'Begin get_obs_id_from_cadc for {artifact_uri}')
     query_string = f"""
-    SELECT DISTINCT O.observationID 
+    SELECT DISTINCT O.observationID
     FROM caom2.Observation AS O
     JOIN caom2.Plane AS P on P.obsID = O.obsID
     JOIN caom2.Artifact AS A on A.planeID = P.planeID
@@ -1086,7 +1086,7 @@ class TelescopeMapping:
     @property
     def observation(self):
         return self._observation
-    
+
     @observation.setter
     def observation(self, value):
         self._observation = value
@@ -1175,7 +1175,6 @@ class Fits2caom2Visitor:
         self._clients = kwargs.get('clients')
         self._observable = kwargs.get('observable')
         self._config = kwargs.get('config')
-        self._dump_config = False
         self._logger = logging.getLogger(self.__class__.__name__)
 
     def _get_blueprint(self, instantiated_class):
@@ -1212,8 +1211,9 @@ class Fits2caom2Visitor:
                     continue
                 blueprint = self._get_blueprint(telescope_data)
                 telescope_data.accumulate_blueprint(blueprint)
-                if self._dump_config:
-                    print(f'Blueprint for {uri}: {blueprint}')
+                if self._config.dump_blueprint and self._config.log_to_file:
+                    with open(f'{self._config.log_file_directory}/{os.path.basename(uri)}.bp', 'w') as f:
+                        f.write(blueprint.__str__())
                 parser = self._get_parser(headers, blueprint, uri)
 
                 if self._observation is None:

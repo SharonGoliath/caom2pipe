@@ -106,6 +106,7 @@ __all__ = [
     'build_uri',
     'Cache',
     'CadcException',
+
     'CaomName',
     'compare_observations',
     'Config',
@@ -251,6 +252,11 @@ class State:
             self.context = result.get('context', {})
             self.content = result
 
+    def add_bookmark(self, key, value):
+        if key not in self.bookmarks:
+            self.bookmarks[key] = {}
+        self.bookmarks[key]['last_record'] = value
+
     def get_bookmark(self, key):
         """Lookup for last_record key. Treat like an offset-aware datetime."""
         result = None
@@ -288,6 +294,16 @@ class State:
             self.bookmarks[key]['last_record'] = value
             self.logger.debug(f'Saving bookmarked last record {value} {self.fqn}')
             write_as_yaml(self.content, self.fqn)
+
+    def write_bookmarks(self, state_fqn):
+        bookmark = { 'bookmarks': {}}
+        for book_mark, last_record in self.bookmarks.items():
+            bookmark['bookmarks'][book_mark] = {}
+            bookmark['bookmarks'][book_mark]['last_record'] = last_record['last_record']
+        write_as_yaml(bookmark, state_fqn)
+
+    def write_content(self, state_fqn):
+        write_as_yaml(self.content, state_fqn)
 
     @staticmethod
     def write_bookmark(state_fqn, book_mark, time_dt):
@@ -771,7 +787,7 @@ class Observable:
     @property
     def rejected(self):
         return self._rejected
-    
+
     @property
     def meta_producer(self):
         return self._meta_producer
@@ -900,6 +916,7 @@ class Config:
         # the fully qualified name for the work file
         self.work_fqn = None
         self._collection = None
+        self._dump_blueprint = False
         self._use_local_files = False
         self._resource_id = None
         self._tap_id = None
@@ -1032,6 +1049,14 @@ class Config:
     @collection.setter
     def collection(self, value):
         self._collection = value
+
+    @property
+    def dump_blueprint(self):
+        return self._dump_blueprint
+
+    @dump_blueprint.setter
+    def dump_blueprint(self, value):
+        self._dump_blueprint = value
 
     @property
     def use_local_files(self):
@@ -1483,6 +1508,7 @@ class Config:
             f'  data_read_groups:: {self.data_read_groups}\n'
             f'  data_sources:: {self.data_sources}\n'
             f'  data_source_extensions:: {self.data_source_extensions}\n'
+            f'  dump_blueprint:: {self.dump_blueprint}\n'
             f'  failure_fqn:: {self.failure_fqn}\n'
             f'  failure_log_file_name:: {self.failure_log_file_name}\n'
             f'  features:: {self.features}\n'
@@ -1626,6 +1652,7 @@ class Config:
                 'cleanup_success_destination', None
             )
             self.data_read_groups = config.get('data_read_groups', [])
+            self.dump_blueprint = config.get('dump_blueprint', False)
             self.logging_level = config.get('logging_level', 'DEBUG')
             self.log_to_file = config.get('log_to_file', False)
             self.log_file_directory = config.get(
@@ -2619,7 +2646,7 @@ def get_version(collection):
         try:
             v = version(application)
         except PackageNotFoundError as e2:
-            logging.warning(f'No version found for {collection}')
+            logging.warning(f'No version found for {application}')
             v = '0.0.0'
     return f'{application}/{v}'
 

@@ -118,7 +118,7 @@ class MetadataReader:
         file_info_keys = '\n'.join(ii for ii in self._file_info.keys())
         header_keys = '\n'.join(ii for ii in self._headers.keys())
         return f'\nheaders:\n{header_keys}\nfile_info:\n{file_info_keys}'
-    
+
     @property
     def file_info(self):
         return self._file_info
@@ -193,7 +193,10 @@ class FileMetadataReader(MetadataReader):
     def _retrieve_headers(self, key, source_name):
         self._headers[key] = []
         if '.fits' in source_name:
-            self._headers[key] = data_util.get_local_headers_from_fits(source_name)
+            try:
+                self._headers[key] = data_util.get_local_headers_from_fits(source_name)
+            except OSError as e:
+                self._headers[key] = data_util.get_local_file_headers(source_name)
 
 
 class Hdf5FileMetadataReader(FileMetadataReader):

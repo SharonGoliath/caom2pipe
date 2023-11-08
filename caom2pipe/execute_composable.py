@@ -312,7 +312,7 @@ class CaomExecute:
     def _visit_meta(self):
         """Execute metadata-only visitors on an Observation in
         memory."""
-        if self.meta_visitors is not None and len(self.meta_visitors) > 0:
+        if self.meta_visitors:
             kwargs = {
                 'working_directory': self._working_dir,
                 'config': self._config,
