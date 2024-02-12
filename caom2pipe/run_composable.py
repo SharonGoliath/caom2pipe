@@ -189,6 +189,9 @@ class TodoRunner:
             self._logger.info(f'Cleanup failed for {entry} with {e}')
             self._logger.debug(traceback.format_exc())
             result = -1
+        if result == 0:
+            # otherwise the metadata may still be required for retries
+            self._metadata_reader.unset(storage_name)
         self._logger.debug(f'End _process_entry with result {result}.')
         return result
 
@@ -197,7 +200,7 @@ class TodoRunner:
         :param current_count: int - current retry count - needs to be passed
             to _process_entry.
         """
-        self._logger.debug('Begin _run_todo_list.')
+        self._logger.debug(f'Begin _run_todo_list with {len(self._todo_list)} records.')
         result = 0
         while len(self._todo_list) > 0:
             entry = self._todo_list.popleft()
@@ -291,6 +294,7 @@ class StateRunner(TodoRunner):
         self._reset_retries()
 
         result = 0
+        self._organizer.choose()
         for data_source in self._data_sources:
             result |= self._process_data_source(data_source)
 
@@ -321,7 +325,6 @@ class StateRunner(TodoRunner):
         else:
             cumulative = 0
             result = 0
-            self._organizer.choose()
             while exec_time <= data_source.end_dt:
                 self._logger.info(f'Processing {data_source.start_key} from {prev_exec_time} to {exec_time}')
                 save_time = exec_time
@@ -688,7 +691,7 @@ def run_single(
     :param metadata_reader MetadataReader instance
     """
     logging.debug(f'Begin run_single {config.work_fqn}')
-    observable = mc.Observable(mc.Rejected(config.rejected_fqn), mc.Metrics(config))
+    observable = mc.Observable(config)
     reporter = mc.ExecutionReporter(config, observable)
     reporter.set_log_location(config)
     clients = cc.ClientCollection(config)

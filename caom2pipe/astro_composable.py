@@ -81,6 +81,7 @@ from astropy.coordinates import SkyCoord
 
 from datetime import timedelta as dt_timedelta
 from datetime import datetime as dt_datetime
+from datetime import timezone
 from enum import Enum
 from requests.adapters import HTTPAdapter
 from requests.packages.urllib3.util.retry import Retry
@@ -185,9 +186,7 @@ def check_fitsverify(fqn):
         logging.debug(cmd)
         cmd_array = cmd.split()
         try:
-            output, outerr = subprocess.Popen(
-                cmd_array, stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            ).communicate()
+            output, outerr = subprocess.Popen(cmd_array, stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()
             if (
                 output is not None
                 and len(output) > 0
@@ -226,9 +225,7 @@ def convert_time(start_time, exposure):
     time."""
     logging.debug('Begin convert_time.')
     if start_time is not None and exposure is not None:
-        logging.debug(
-            f'Use date {start_time} and exposure {exposure} to convert time.'
-        )
+        logging.debug(f'Use date {start_time} and exposure {exposure} to convert time.')
         if type(start_time) is float:
             t_start = Time(start_time, format='mjd')
         else:
@@ -239,9 +236,7 @@ def convert_time(start_time, exposure):
         t_end.format = 'mjd'
         mjd_start = t_start.value
         mjd_end = t_end.value
-        logging.debug(
-            f'End convert_time mjd start {mjd_start} mjd end {mjd_end}.'
-        )
+        logging.debug(f'End convert_time mjd start {mjd_start} mjd end {mjd_end}.')
         return mjd_start, mjd_end
     return None, None
 
@@ -273,9 +268,7 @@ def get_geocentric_location(site):
 def get_location(latitude, longitude, elevation):
     """The CAOM model expects the telescope location to be in geocentric
     coordinates. Rely on astropy to do the conversion."""
-    result = EarthLocation.from_geodetic(
-        longitude, latitude, elevation, 'WGS84'
-    )
+    result = EarthLocation.from_geodetic(longitude, latitude, elevation, 'WGS84')
     return result.x.value, result.y.value, result.z.value
 
 
@@ -419,9 +412,7 @@ def get_timedelta_in_s(from_value):
     :return: the value as a timedelta, in seconds
     """
     temp = dt_strptime(from_value, '%H:%M:%S')
-    td = dt_timedelta(
-        hours=temp.tm_hour, minutes=temp.tm_min, seconds=temp.tm_sec
-    )
+    td = dt_timedelta(hours=temp.tm_hour, minutes=temp.tm_min, seconds=temp.tm_sec)
     return td.seconds
 
 
@@ -520,8 +511,7 @@ class FilterMetadataCache:
         """
         if self._connected:
             if (
-                instrument is None
-                or (isinstance(instrument, Enum) and instrument.value is None)
+                instrument is None or (isinstance(instrument, Enum) and instrument.value is None)
             ) and filter_name is None:
                 result = self._cache.get(self._default_key)
             else:
@@ -534,8 +524,7 @@ class FilterMetadataCache:
                     vo_table, error_message = get_vo_table(url)
                     if vo_table is None:
                         self._logger.warning(
-                            f'Unable to download SVO filter information '
-                            f'from {url} because {error_message}'
+                            f'Unable to download SVO filter information ' f'from {url} because {error_message}'
                         )
                         # identify missing SVO lookups as un-defined cache
                         # values
@@ -543,16 +532,13 @@ class FilterMetadataCache:
                         central_wl = -2
                     else:
                         fwhm = vo_table.get_field_by_id('FWHM').value
-                        central_wl = vo_table.get_field_by_id(
-                            'WavelengthCen'
-                        ).value
+                        central_wl = vo_table.get_field_by_id('WavelengthCen').value
                     result = {'cw': central_wl, 'fwhm': fwhm}
                     self._cache[cache_key] = result
         else:
             # some recognizably wrong value
             self._logger.warning(
-                f'Not connected - using default energy values for '
-                f'{instrument} and {filter_name}'
+                f'Not connected - using default energy values for ' f'{instrument} and {filter_name}'
             )
             result = {'cw': -0.1, 'fwhm': -0.1}
         return result
@@ -595,7 +581,9 @@ class FilterMetadataCache:
         return result
 
 
-def is_good_date(value, start_date, check_end_date=True, end_date=Time(dt_datetime.utcnow(), scale='utc')):
+def is_good_date(
+    value, start_date, check_end_date=True, end_date=Time(dt_datetime.now(tz=timezone.utc), scale='utc')
+):
     """
     Check that dates exist within a range.
 
@@ -607,6 +595,7 @@ def is_good_date(value, start_date, check_end_date=True, end_date=Time(dt_dateti
     """
     # local import for Docker image dependencies
     import numpy
+
     result = True
     if value is None:
         result = False

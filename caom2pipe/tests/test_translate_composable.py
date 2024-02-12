@@ -68,7 +68,7 @@
 
 from unittest.mock import patch
 
-from caom2utils import ObsBlueprint
+from caom2utils.blueprints import ObsBlueprint
 from caom2pipe import manage_composable as mc
 from caom2pipe import translate_composable as tc
 

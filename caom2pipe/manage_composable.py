@@ -81,7 +81,8 @@ import traceback
 import yaml
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
 from dateutil import parser, tz
 from enum import Enum
 from hashlib import md5
@@ -106,6 +107,7 @@ __all__ = [
     'build_uri',
     'Cache',
     'CadcException',
+
     'CaomName',
     'compare_observations',
     'Config',
@@ -251,6 +253,11 @@ class State:
             self.context = result.get('context', {})
             self.content = result
 
+    def add_bookmark(self, key, value):
+        if key not in self.bookmarks:
+            self.bookmarks[key] = {}
+        self.bookmarks[key]['last_record'] = value
+
     def get_bookmark(self, key):
         """Lookup for last_record key. Treat like an offset-aware datetime."""
         result = None
@@ -288,6 +295,16 @@ class State:
             self.bookmarks[key]['last_record'] = value
             self.logger.debug(f'Saving bookmarked last record {value} {self.fqn}')
             write_as_yaml(self.content, self.fqn)
+
+    def write_bookmarks(self, state_fqn):
+        bookmark = { 'bookmarks': {}}
+        for book_mark, last_record in self.bookmarks.items():
+            bookmark['bookmarks'][book_mark] = {}
+            bookmark['bookmarks'][book_mark]['last_record'] = last_record['last_record']
+        write_as_yaml(bookmark, state_fqn)
+
+    def write_content(self, state_fqn):
+        write_as_yaml(self.content, state_fqn)
 
     @staticmethod
     def write_bookmark(state_fqn, book_mark, time_dt):
@@ -426,8 +443,7 @@ class ExecutionReporter:
         self._success_fqn = None
         self._report_fqn = config.report_fqn
         self._observable = observable
-        application = f'{config.collection.lower()}2caom2'
-        self._summary = ExecutionSummary(os.path.basename(config.working_directory), application)
+        self._summary = ExecutionSummary(os.path.basename(config.working_directory), config.collection)
         self.set_log_location(config)
         self._logger = logging.getLogger(self.__class__.__name__)
 
@@ -446,14 +462,13 @@ class ExecutionReporter:
                 result = f.readlines()
         return len(result)
 
-    def _count_timeouts(self, e):
-        if e is not None and (
+    def _is_timeout(self, e):
+        return e is not None and (
             'Read timed out' in e
             or 'reset by peer' in e
             or 'ConnectTimeoutError' in e
             or 'Broken pipe' in e
-        ):
-            self._summary.add_timeouts(1)
+        )
 
     def _set_log_files(self, config):
         """Support changing log file locations during a retry."""
@@ -468,7 +483,7 @@ class ExecutionReporter:
         """Support changing log file locations during a retry."""
         self._set_log_files(config)
         create_dir(config.log_file_directory)
-        now_s = datetime.utcnow().timestamp()
+        now_s = datetime.now(tz=timezone.utc).timestamp()
         for fqn in [self._success_fqn, self._failure_fqn, self._retry_fqn, self._report_fqn]:
             ExecutionReporter._init_log_file(fqn, now_s)
 
@@ -496,7 +511,8 @@ class ExecutionReporter:
         """
         self._logger.debug('Begin capture_failure')
         self._summary.add_errors(1)
-        self._count_timeouts(stack_trace)
+        if self._is_timeout(stack_trace):
+            self._summary.add_timeouts(1)
         with open(self._failure_fqn, 'a') as failure:
             if e.args is not None and len(e.args) > 1:
                 min_error = e.args[0]
@@ -506,7 +522,7 @@ class ExecutionReporter:
 
         # only retry entries that are not permanently marked as rejected
         reason = Rejected.known_failure(stack_trace)
-        if reason == Rejected.NO_REASON:
+        if reason == Rejected.NO_REASON or self._is_timeout(stack_trace):
             with open(self._retry_fqn, 'a') as retry:
                 for entry in storage_name.source_names:
                     retry.write(f'{entry}\n')
@@ -523,7 +539,7 @@ class ExecutionReporter:
         """
         self._logger.debug('Begin capture_success')
         self._summary.add_successes(1)
-        execution_s = datetime.utcnow().timestamp() - start_time
+        execution_s = datetime.now(tz=timezone.utc).timestamp() - start_time
         success = open(self._success_fqn, 'a')
         try:
             success.write(f'{datetime.now()} {obs_id} {file_name} {execution_s:.2f}\n')
@@ -576,7 +592,7 @@ class ExecutionSummary:
     This class generates summary reports of the successes and failures that occur during a pipeline run.
     """
 
-    def __init__(self, location, application):
+    def __init__(self, location, collection):
         """
         - Execution time: the time from initiating the pipeline to completion of execution.
         - Number of inputs: the number of entries originally counted. Depending on the content of config.yml, this
@@ -596,9 +612,9 @@ class ExecutionSummary:
              CADC storage. If the checksum is the same, the pipeline can make no changes to either the data or metadata,
              so it doesn't try.
         """
-        self._version = '0.0.0' if application == 'DEFAULT' else get_version(application)
+        self._version = '0.0.0' if collection == 'TEST' else get_version(collection)
         self._location = location
-        self._start_time = datetime.now(tz=tz.UTC).timestamp()
+        self._start_time = datetime.now(tz=timezone.utc).timestamp()
         self._entries_sum = 0
         self._errors_sum = 0
         self._rejected_sum = 0
@@ -641,8 +657,8 @@ class ExecutionSummary:
 
     def report(self):
         msg1 = f'Location: {self._location}'
-        msg2 = f'Date: {datetime.isoformat(datetime.utcnow())}'
-        execution_time = datetime.now(tz=tz.UTC).timestamp() - self._start_time
+        msg2 = f'Date: {datetime.isoformat(datetime.now(tz=timezone.utc))}'
+        execution_time = datetime.now(tz=timezone.utc).timestamp() - self._start_time
         msg3 = f'Execution Time: {execution_time:.2f} s'
         msg4 = f'Version: {self._version}'
         msg5 = f'    Number of Inputs: {self._entries_sum}'
@@ -679,7 +695,7 @@ class ExecutionSummary:
 
     @staticmethod
     def read_report_file(fqn):
-        summary = ExecutionSummary(os.path.basename(fqn), 'DEFAULT')
+        summary = ExecutionSummary(os.path.basename(fqn), 'TEST')
         with open(fqn) as f_in:
             for line in f_in:
                 if 'Number of' in line:
@@ -737,7 +753,7 @@ class Metrics:
     def capture(self):
         if self.enabled:
             create_dir(self.observable_dir)
-            now = datetime.utcnow().timestamp()
+            now = datetime.now(tz=timezone.utc).timestamp()
             for service in self.history.keys():
                 fqn = os.path.join(
                     self.observable_dir, f'{now}.{service}.yml'
@@ -772,10 +788,14 @@ class Observable:
     @property
     def rejected(self):
         return self._rejected
-    
+
     @property
     def meta_producer(self):
         return self._meta_producer
+
+    @meta_producer.setter
+    def meta_producer(self, value):
+        self._meta_producer = value
 
     @property
     def metrics(self):
@@ -901,6 +921,8 @@ class Config:
         # the fully qualified name for the work file
         self.work_fqn = None
         self._collection = None
+        self._dump_blueprint = False
+        self._http_get_timeout = 10
         self._use_local_files = False
         self._resource_id = None
         self._tap_id = None
@@ -945,6 +967,8 @@ class Config:
         self._cache_file_name = None
         # the fully qualified name for the file
         self.cache_fqn = None
+        self._data_read_groups = []
+        self._meta_read_groups = []
         self._data_sources = []
         self._data_source_extensions = ['.fits']
         self._recurse_data_sources = True
@@ -955,7 +979,7 @@ class Config:
         self._scheme = 'cadc'
         self._storage_inventory_resource_id = None
         self._storage_inventory_tap_resource_id = None
-        self._time_zone = tz.UTC
+        self._time_zone = timezone.utc
         self._total_retry_fqn = None
 
     @property
@@ -990,6 +1014,22 @@ class Config:
             )
 
     @property
+    def data_read_groups(self):
+        return self._data_read_groups
+
+    @data_read_groups.setter
+    def data_read_groups(self, value):
+        self._data_read_groups = value
+
+    @property
+    def meta_read_groups(self):
+        return self._meta_read_groups
+
+    @meta_read_groups.setter
+    def meta_read_groups(self, value):
+        self._meta_read_groups = value
+
+    @property
     def data_sources(self):
         """Root URI for data retrieval"""
         return self._data_sources
@@ -1015,6 +1055,22 @@ class Config:
     @collection.setter
     def collection(self, value):
         self._collection = value
+
+    @property
+    def dump_blueprint(self):
+        return self._dump_blueprint
+
+    @dump_blueprint.setter
+    def dump_blueprint(self, value):
+        self._dump_blueprint = value
+
+    @property
+    def http_get_timeout(self):
+        return self._http_get_timeout
+
+    @http_get_timeout.setter
+    def http_get_timeout(self, value):
+        self._http_get_timeout = value
 
     @property
     def use_local_files(self):
@@ -1463,15 +1519,19 @@ class Config:
             f'  cleanup_success_destination:: '
             f'{self.cleanup_success_destination}\n'
             f'  collection:: {self.collection}\n'
+            f'  data_read_groups:: {self.data_read_groups}\n'
             f'  data_sources:: {self.data_sources}\n'
             f'  data_source_extensions:: {self.data_source_extensions}\n'
+            f'  dump_blueprint:: {self.dump_blueprint}\n'
             f'  failure_fqn:: {self.failure_fqn}\n'
             f'  failure_log_file_name:: {self.failure_log_file_name}\n'
             f'  features:: {self.features}\n'
+            f'  http_get_timeout:: {self.http_get_timeout}\n'
             f'  interval:: {self.interval}\n'
             f'  log_file_directory:: {self.log_file_directory}\n'
             f'  log_to_file:: {self.log_to_file}\n'
             f'  logging_level:: {self.logging_level}\n'
+            f'  meta_read_groups:: {self.meta_read_groups}\n'
             f'  observable_directory:: {self.observable_directory}\n'
             f'  observe_execution:: {self.observe_execution}\n'
             f'  preview_scheme:: {self.preview_scheme}\n'
@@ -1606,11 +1666,15 @@ class Config:
             self.cleanup_success_destination = config.get(
                 'cleanup_success_destination', None
             )
+            self.data_read_groups = config.get('data_read_groups', [])
+            self.dump_blueprint = config.get('dump_blueprint', False)
+            self.http_get_timeout = config.get('http_get_timeout', 10)
             self.logging_level = config.get('logging_level', 'DEBUG')
             self.log_to_file = config.get('log_to_file', False)
             self.log_file_directory = config.get(
                 'log_file_directory', self.working_directory
             )
+            self.meta_read_groups = config.get('meta_read_groups', [])
             self.task_types = Config._obtain_task_types(config, [])
             self.collection = config.get('collection', 'TEST')
             self.success_log_file_name = config.get(
@@ -1856,7 +1920,8 @@ class PreviewVisitor:
     def __str__(self):
         return (
             f'\nworking directory: {self._working_dir}\n'
-            f'science file: {self._storage_name.file_name}'
+            f'      science fqn: {self._science_fqn}\n'
+            f'     science file: {self._storage_name.file_name}'
         )
 
     def visit(self, observation):
@@ -1926,6 +1991,7 @@ class PreviewVisitor:
     def _do_prev(self, plane, obs_id):
         self.generate_plots(obs_id)
         if self._hdu_list is not None:
+            # astropy says https://docs.astropy.org/en/stable/io/fits/index.html#working-with-large-files
             self._hdu_list.close()
             del self._hdu_list[self._ext].data
             del self._hdu_list
@@ -1948,9 +2014,7 @@ class PreviewVisitor:
                 self._clients.data_client.put(self._working_dir, uri)
 
     def _gen_thumbnail(self):
-        self._logger.debug(
-            f'Generating thumbnail for file {self._science_fqn}.'
-        )
+        self._logger.debug(f'Generating thumbnail {self._thumb_fqn}.')
         count = 0
         if os.path.exists(self._preview_fqn):
             # keep import local
@@ -2156,10 +2220,6 @@ class StorageName:
         return pattern.match(self._file_name)
 
     def get_file_fqn(self, working_directory):
-        # if the decompressed file exists, use that
-        # else, if the compressed file exists, use that
-
-        # file_uri is the file name without the compression extension
         temp_f_name = os.path.basename(self.file_uri)
         temp_fqn = os.path.join(working_directory, temp_f_name)
         temp_obs_fqn = os.path.join(os.path.join(working_directory, self._obs_id), temp_f_name)
@@ -2168,7 +2228,7 @@ class StorageName:
             self._source_names is not None
             and len(self._source_names) > 0
             and os.path.exists(self._source_names[0])
-            # is there an interim, uncompressed file name?
+            # is there an uncompressed file name?
             and self._source_names[0].endswith(temp_f_name)
         ):
             fqn = self._source_names[0]
@@ -2176,7 +2236,7 @@ class StorageName:
             fqn = temp_fqn
         elif os.path.exists(temp_obs_fqn):
             fqn = temp_obs_fqn
-        elif os.path.exists(self._source_names[0]):
+        elif len(self._source_names) > 0 and os.path.exists(self._source_names[0]):
             # use the compressed file, if it can be found
             fqn = self._source_names[0]
         return fqn
@@ -2588,17 +2648,16 @@ def get_now():
 
 def get_version(collection):
     """A common implementation to retrieve a pipeline version."""
-    try:
-        application = f'{collection.lower()}2caom2'
-        v = version(application)
-    except PackageNotFoundError as e:
-        # for BRITE-Constellation
-        application = f'{collection.split("-")[0].lower()}2caom2'
+    v = None
+    for application in [f'{collection.lower()}2caom2', f'{collection.split("-")[0].lower()}2caom2', f'{collection}2caom2']:
         try:
             v = version(application)
-        except PackageNotFoundError as e2:
-            logging.warning(f'No version found for {collection}')
-            v = '0.0.0'
+            break
+        except PackageNotFoundError as ignore:
+            pass
+    if v is None:
+        logging.info(f'No version found for {collection}')
+        v = '0.0.0'
     return f'{application}/{v}'
 
 
@@ -2871,7 +2930,6 @@ def query_endpoint_session(url, session, timeout=20):
     """Return a response for an endpoint. Caller needs to call 'close'
     on the response.
     """
-
     try:
         response = session.get(url, timeout=timeout)
         response.raise_for_status()
@@ -3010,7 +3068,7 @@ def increment_time(this_dt, by_interval, unit='%M'):
     return temp
 
 
-def http_get(url, local_fqn):
+def http_get(url, local_fqn, timeout=10):
     """Retrieve a file via http.
 
     :param url where the file can be found.
@@ -3018,14 +3076,16 @@ def http_get(url, local_fqn):
         locally.
     """
     try:
-        with requests.get(url, stream=True, timeout=10) as r:
+        with requests.get(url, stream=True, timeout=timeout) as r:
             r.raise_for_status()
             with open(local_fqn, 'wb') as f:
                 for chunk in r.iter_content(chunk_size=READ_BLOCK_SIZE):
                     f.write(chunk)
+            if not os.path.exists(local_fqn):
+                raise CadcException(f'Retrieve failed. {local_fqn} does not exist.')
+            file_meta = get_file_meta(local_fqn)
             length = to_int(r.headers.get('Content-Length'))
             if length is not None:
-                file_meta = get_file_meta(local_fqn)
                 if file_meta['size'] != length:
                     raise CadcException(
                         f'Could not retrieve {local_fqn} from {url}. File '
@@ -3033,16 +3093,11 @@ def http_get(url, local_fqn):
                     )
             checksum = r.headers.get('Content-Checksum')
             if checksum is not None:
-                file_meta = get_file_meta(local_fqn)
                 if file_meta['md5sum'] != checksum:
                     raise CadcException(
                         f'Could not retrieve {local_fqn} from {url}. File '
                         f'checksum error.'
                     )
-        if not os.path.exists(local_fqn):
-            raise CadcException(
-                f'Retrieve failed. {local_fqn} does not exist.'
-            )
     except requests.exceptions.HTTPError as e:
         logging.debug(traceback.format_exc())
         raise CadcException(

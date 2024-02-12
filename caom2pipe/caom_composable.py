@@ -70,7 +70,8 @@ import logging
 import os
 import traceback
 
-from datetime import datetime
+from copy import deepcopy
+from datetime import datetime, timezone
 
 from caom2 import CoordAxis1D, Axis, RefCoord, CoordRange1D, SpectralWCS
 from caom2 import TypedSet, ObservationURI, PlaneURI, Chunk, CoordPolygon2D
@@ -78,9 +79,11 @@ from caom2 import ValueCoord2D, Algorithm, Artifact, Part, TemporalWCS
 from caom2 import Instrument, TypedOrderedDict, SimpleObservation, CoordError
 from caom2 import CoordFunction1D, DerivedObservation, Provenance
 from caom2 import CoordBounds1D, TypedList, ProductType
+from caom2.caom_util import URISet
 from caom2.diff import get_differences
-from caom2utils import ObsBlueprint, BlueprintParser, FitsParser
-from caom2utils import update_artifact_meta, Caom2Exception
+from caom2utils.blueprints import ObsBlueprint
+from caom2utils.parsers import BlueprintParser, Caom2Exception, FitsParser
+from caom2utils.caom2blueprint import update_artifact_meta
 
 from caom2pipe import astro_composable as ac
 from caom2pipe import client_composable as clc
@@ -436,7 +439,7 @@ def change_to_composite(observation, algorithm_name='composite'):
         observation.target_position,
     )
     temp.meta_producer = observation.meta_producer
-    temp.last_modified = datetime.utcnow()
+    temp.last_modified = datetime.now(tz=timezone.utc).replace(tzinfo=None)
     temp._id = observation._id
     return temp
 
@@ -461,7 +464,7 @@ def change_to_simple(observation):
         observation.environment,
         observation.target_position,
     )
-    temp.last_modified = datetime.utcnow()
+    temp.last_modified = datetime.now(tz=timezone.utc).replace(tzinfo=None)
     temp._id = observation._id
     return temp
 
@@ -523,14 +526,13 @@ def copy_artifact(from_artifact, features=None):
     return copy
 
 
-def copy_chunk(from_chunk, features=None):
+def copy_chunk(from_chunk):
     """Make a copy of a Chunk. This works around the CAOM2 constraint
     'org.postgresql.util.PSQLException: ERROR: duplicate key value violates
     unique constraint "chunk_pkey"', when trying to use the same chunk
     information in different parts (e.g. when referring to hdf5 files).
 
     :param from_chunk Chunk of which to make a copy
-    :param features which version of CAOM to use
     :return a copy of the from_chunk
     """
     copy = Chunk(
@@ -538,17 +540,17 @@ def copy_chunk(from_chunk, features=None):
         naxis=from_chunk.naxis,
         position_axis_1=from_chunk.position_axis_1,
         position_axis_2=from_chunk.position_axis_2,
-        position=from_chunk.position,
+        position=deepcopy(from_chunk.position),
         energy_axis=from_chunk.energy_axis,
-        energy=from_chunk.energy,
+        energy=deepcopy(from_chunk.energy),
         time_axis=from_chunk.time_axis,
-        time=from_chunk.time,
+        time=deepcopy(from_chunk.time),
         custom_axis=from_chunk.custom_axis,
-        custom=from_chunk.custom,
+        custom=deepcopy(from_chunk.custom),
         polarization_axis=from_chunk.polarization_axis,
-        polarization=from_chunk.polarization,
+        polarization=deepcopy(from_chunk.polarization),
         observable_axis=from_chunk.observable_axis,
-        observable=from_chunk.observable,
+        observable=deepcopy(from_chunk.observable),
     )
     copy.meta_producer = from_chunk.meta_producer
     return copy
@@ -762,7 +764,7 @@ def get_obs_id_from_cadc(artifact_uri, tap_client):
     """
     logging.debug(f'Begin get_obs_id_from_cadc for {artifact_uri}')
     query_string = f"""
-    SELECT DISTINCT O.observationID 
+    SELECT DISTINCT O.observationID
     FROM caom2.Observation AS O
     JOIN caom2.Plane AS P on P.obsID = O.obsID
     JOIN caom2.Artifact AS A on A.planeID = P.planeID
@@ -1070,19 +1072,22 @@ class TelescopeMapping:
     map for a file, and then doing any n:n (FITS keywords:CAOM2 keywords)
     mapping, using the 'update' method.
     """
-    def __init__(self, storage_name, headers, clients, observable=None, observation=None):
+    def __init__(self, storage_name, headers, clients, observable=None, observation=None, config=None):
         self._storage_name = storage_name
         self._meta_producer = observable.meta_producer if observable is not None else None
         self._headers = headers
         self._clients = clients
         self._observable = observable
         self._observation = observation
+        self._meta_read_groups = URISet()
+        self._data_read_groups = URISet()
+        self._init_read_groups(config)
         self._logger = logging.getLogger(self.__class__.__name__)
 
     @property
     def observation(self):
         return self._observation
-    
+
     @observation.setter
     def observation(self, value):
         self._observation = value
@@ -1100,13 +1105,6 @@ class TelescopeMapping:
         bp.set('Artifact.metaProducer', self._meta_producer)
         bp.set('Chunk.metaProducer', self._meta_producer)
 
-    def _update_artifact(self, artifact):
-        """
-        :param artifact: Artifact instance
-        :return:
-        """
-        return
-
     def update(self, file_info):
         """
         Update the Artifact file-based metadata. Override if it's necessary
@@ -1117,12 +1115,14 @@ class TelescopeMapping:
         :return:
         """
         self._logger.debug(f'Begin update for {self._observation.observation_id}')
+        self._update_groups(self._observation.meta_read_groups, self._meta_read_groups)
         for plane in self._observation.planes.values():
             if plane.product_id != self._storage_name.product_id:
                 self._logger.debug(
                     f'Product ID is {plane.product_id} but working on {self._storage_name.product_id}. Continuing.'
                 )
                 continue
+            self._update_plane(plane)
             for artifact in plane.artifacts.values():
                 if artifact.uri != self._storage_name.file_uri:
                     self._logger.debug(
@@ -1135,6 +1135,32 @@ class TelescopeMapping:
 
         self._logger.debug('End update')
         return self._observation
+
+    def _init_read_groups(self, config):
+        for entry in config.data_read_groups:
+            self._data_read_groups.add(entry)
+        for entry in config.meta_read_groups:
+            self._meta_read_groups.add(entry)
+
+    def _update_artifact(self, artifact):
+        """
+        :param artifact: Artifact instance
+        :return:
+        """
+        raise NotImplementedError
+
+    def _update_plane(self, plane):
+        self._update_groups(plane.data_read_groups, self._data_read_groups)
+        self._update_groups(plane.meta_read_groups, self._meta_read_groups)
+
+    @staticmethod
+    def _update_groups(replace_these, with_these):
+        if len(with_these) > 0:
+            while len(replace_these) > 0:
+                replace_these.pop()
+            for entry in with_these:
+                replace_these.add(entry)
+
 
 
 class Fits2caom2Visitor:
@@ -1149,7 +1175,7 @@ class Fits2caom2Visitor:
         self._metadata_reader = kwargs.get('metadata_reader')
         self._clients = kwargs.get('clients')
         self._observable = kwargs.get('observable')
-        self._dump_config = False
+        self._config = kwargs.get('config')
         self._logger = logging.getLogger(self.__class__.__name__)
 
     def _get_blueprint(self, instantiated_class):
@@ -1167,10 +1193,13 @@ class Fits2caom2Visitor:
                 f'Using a FitsParser for {self._storage_name.file_uri}'
             )
             parser = FitsParser(headers, blueprint, uri)
+        self._logger.debug(f'Created {parser.__class__.__name__} parser for {uri}.')
         return parser
 
-    def _get_mapping(self, headers):
-        return TelescopeMapping(self._storage_name, headers, self._clients, self._observable, self._observation)
+    def _get_mapping(self, headers, dest_uri):
+        return TelescopeMapping(
+            self._storage_name, headers, self._clients, self._observable, self._observation, self._config
+        )
 
     def visit(self):
         self._logger.debug('Begin visit')
@@ -1178,14 +1207,15 @@ class Fits2caom2Visitor:
             for uri in self._storage_name.destination_uris:
                 self._logger.debug(f'Build observation for {uri}')
                 headers = self._metadata_reader.headers.get(uri)
-                telescope_data = self._get_mapping(headers)
+                telescope_data = self._get_mapping(headers, uri)
                 if telescope_data is None:
                     self._logger.info(f'Ignoring {uri} because there is no TelescopeMapping.')
                     continue
                 blueprint = self._get_blueprint(telescope_data)
                 telescope_data.accumulate_blueprint(blueprint)
-                if self._dump_config:
-                    print(f'Blueprint for {uri}: {blueprint}')
+                if self._config.dump_blueprint and self._config.log_to_file:
+                    with open(f'{self._config.log_file_directory}/{os.path.basename(uri)}.bp', 'w') as f:
+                        f.write(blueprint.__str__())
                 parser = self._get_parser(headers, blueprint, uri)
 
                 if self._observation is None:
@@ -1204,7 +1234,6 @@ class Fits2caom2Visitor:
                             algorithm=Algorithm('composite'),
                         )
                     telescope_data.observation = self._observation
-
                 parser.augment_observation(
                     observation=self._observation,
                     artifact_uri=uri,

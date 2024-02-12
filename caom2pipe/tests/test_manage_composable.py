@@ -71,7 +71,7 @@ import os
 import pytest
 import traceback
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from dateutil import tz
 from shutil import copy
 from unittest.mock import Mock, patch
@@ -790,7 +790,7 @@ def test_log_directory_construction(test_config, tmpdir):
         test_sname = tc.TStorageName(obs_id='test_obs_id')
         test_subject.capture_failure(test_sname, e2, traceback.format_exc())
 
-    test_subject.capture_success('test_obs_id', 'C121212_01234_CAL.fits.gz', datetime.utcnow().timestamp())
+    test_subject.capture_success('test_obs_id', 'C121212_01234_CAL.fits.gz', datetime.now(tz=timezone.utc).timestamp())
     test_subject.report()
 
     success_content = open(test_config.success_fqn).read()
@@ -814,37 +814,37 @@ def test_log_directory_construction(test_config, tmpdir):
 def test_dt():
     # formats that have been encountered in FITS files
     for fmt in [
-        '2023-03-23T10:08:31.123456',     # ISO_8601_FORMAT,
-        '2023-03-23T10:08:31',            # '%Y-%m-%dT%H:%M:%S',
-        '2023-03-23 10:08:31.123456',     # '%Y-%m-%d %H:%M:%S.%f',
-        '23-Mar-2023 10:08',              # '%d-%b-%Y %H:%M',
-        'Mar 23 2023',                    # '%b %d %Y',
+        '2024-03-23T10:08:31.123456',     # ISO_8601_FORMAT,
+        '2024-03-23T10:08:31',            # '%Y-%m-%dT%H:%M:%S',
+        '2024-03-23 10:08:31.123456',     # '%Y-%m-%d %H:%M:%S.%f',
+        '23-Mar-2024 10:08',              # '%d-%b-%Y %H:%M',
+        'Mar 23 2024',                    # '%b %d %Y',
         'Mar 23 10:08',                   # '%b %d %H:%M',
-        '20230323-100831',                # '%Y%m%d-%H%M%S',
-        '2023-03-23',                     # '%Y-%m-%d',
-        'Fri Mar 23 10:08:31 HST 2023',   # '%a %b %d %H:%M:%S HST %Y',
-        '2023/03/23 10:08:31',            # '%Y/%m/%d %H:%M:%S',
-        'Fri, 23 Mar 2023 10:08:31 GMT',  # '%a, %d %b %Y %H:%M:%S GMT',
-        '2023-03-23T10:08',               # '%Y-%m-%dT%H:%M',
-        'Fri Mar 23 2023 10:08:31',       # '%a %b %d %Y %H:%M:%S',
-        '20230323 10:08',                 # '%Y%m%d %H:%M',
-        '23Mar2023 10:08',                # '%d%b%Y %H:%M',
-        '2023-03-23 10:08',               # '%Y-%m-%d %H:%M',
-        '23Mar23',                        # %y%b%d
-        '2023/03/23',                     # '%Y/%m/%d',
-        '23/03/23',                       # '%d/%m/%y',
-        '23/03/23 10:08:31',              # '%d/%m/%y %H:%M:%S',
-        '2023-03-23 10:08:31.123456+00:00',
+        '20240323-100831',                # '%Y%m%d-%H%M%S',
+        '2024-03-23',                     # '%Y-%m-%d',
+        'Fri Mar 23 10:08:31 HST 2024',   # '%a %b %d %H:%M:%S HST %Y',
+        '2024/03/23 10:08:31',            # '%Y/%m/%d %H:%M:%S',
+        'Fri, 23 Mar 2024 10:08:31 GMT',  # '%a, %d %b %Y %H:%M:%S GMT',
+        '2024-03-23T10:08',               # '%Y-%m-%dT%H:%M',
+        'Fri Mar 23 2024 10:08:31',       # '%a %b %d %Y %H:%M:%S',
+        '20240323 10:08',                 # '%Y%m%d %H:%M',
+        '23Mar2024 10:08',                # '%d%b%Y %H:%M',
+        '2024-03-23 10:08',               # '%Y-%m-%d %H:%M',
+        '23Mar24',                        # %y%b%d
+        '2024/03/23',                     # '%Y/%m/%d',
+        '23/03/24',                       # '%d/%m/%y',
+        '23/03/24 10:08:31',              # '%d/%m/%y %H:%M:%S',
+        '2024-03-23 10:08:31.123456+00:00',
         '10:08:31',                       # '%H:%M:%S',
-        '2023/03/23,10:08:31',            # '%Y/%m/%d,%H:%M:%S',
-        '2023_03_23T10_08_31.123456',     # '%Y_%m_%dT%H_%M_%S.%f',
-        '2023-03-23HST10:08:31',          # '%Y-%m-%dHST%H:%M:%S',
-        '2023Mar23',                      # %Y%b%d
+        '2024/03/23,10:08:31',            # '%Y/%m/%d,%H:%M:%S',
+        '2024_03_23T10_08_31.123456',     # '%Y_%m_%dT%H_%M_%S.%f',
+        '2024-03-23HST10:08:31',          # '%Y-%m-%dHST%H:%M:%S',
+        '2024Mar23',                      # %Y%b%d
     ]:
         result = mc.make_datetime(fmt)
         assert result is not None, f'expect a result {fmt}'
         if fmt != '10:08:31':  # get today's date with that hour
-            assert (result.year == 2023 or result.year == 0), f'year {fmt}'
+            assert (result.year == 2024 or result.year == 0), f'year {fmt}'
             assert (result.month == 3 or result.month == 0), f'month {fmt}'
             assert (result.day == 23 or result.day == 0), f'day {fmt} {result.day}'
         if 'HST' in fmt:

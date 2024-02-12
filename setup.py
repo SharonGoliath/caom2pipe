@@ -4,13 +4,10 @@
 import glob
 import os
 import sys
-import imp
 from setuptools.command.test import test as TestCommand
 from setuptools import find_packages
 
 from setuptools import setup
-
-import subprocess
 
 # read the README.md file and return as string.
 def readme():
@@ -40,7 +37,7 @@ VERSION = metadata.get('version', 'none')
 
 # generate the version file
 with open(os.path.join(PACKAGENAME, 'version.py'), 'w') as f:
-    f.write('version = \'{}\'\n'.format(VERSION))	
+    f.write('version = \'{}\'\n'.format(VERSION))
 
 # Treat everything in scripts except README.md as a script to be installed
 scripts = [fname for fname in glob.glob(os.path.join('scripts', '*'))
@@ -70,7 +67,7 @@ class PyTest(TestCommand):
         import pytest
         err_no = pytest.main(self.pytest_args)
         sys.exit(err_no)
-        
+
 install_requires=metadata.get('install_requires', '').strip().split()
 
 setup(name=PACKAGENAME,

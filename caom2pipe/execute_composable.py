@@ -115,7 +115,7 @@ import logging
 import os
 import traceback
 
-from datetime import datetime
+from datetime import datetime, timezone
 from shutil import copyfileobj
 from urllib.parse import urlparse
 
@@ -312,9 +312,10 @@ class CaomExecute:
     def _visit_meta(self):
         """Execute metadata-only visitors on an Observation in
         memory."""
-        if self.meta_visitors is not None and len(self.meta_visitors) > 0:
+        if self.meta_visitors:
             kwargs = {
                 'working_directory': self._working_dir,
+                'config': self._config,
                 'clients': self._clients,
                 'storage_name': self._storage_name,
                 'metadata_reader': self._metadata_reader,
@@ -322,11 +323,10 @@ class CaomExecute:
             }
             for visitor in self.meta_visitors:
                 try:
-                    self._logger.debug(f'Visit for {visitor.__class__.__name__}')
                     self._observation = visitor.visit(self._observation, **kwargs)
                     if self._observation is None:
-                        msg = f'Observation construction failed for {self._storage_name.file_uri}'
-                        self._logger.error(f'Stopping _visit_meta in {visitor.__class__.__name__} with {msg}')
+                        msg = f'No Observation for {self._storage_name.file_uri}. Construction failed.'
+                        self._logger.error(f'Stopping _visit_meta with {msg}')
                         raise mc.CadcException(msg)
                 except Exception as e:
                     raise mc.CadcException(e)
@@ -1060,7 +1060,7 @@ class OrganizeExecutes:
         """
         self._logger.debug(f'Begin do_one {storage_name}')
         self._set_up_file_logging(storage_name)
-        start_s = datetime.utcnow().timestamp()
+        start_s = datetime.now(tz=timezone.utc).timestamp()
         try:
             if self.is_rejected(storage_name):
                 self._reporter.capture_failure(storage_name, BaseException('StorageName.is_rejected'), 'Rejected')

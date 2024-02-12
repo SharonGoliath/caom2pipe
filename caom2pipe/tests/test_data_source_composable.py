@@ -73,7 +73,7 @@ import shutil
 from astropy.table import Table
 from cadctap import CadcTapClient
 from cadcutils import exceptions
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from time import sleep
 from unittest.mock import Mock, patch, call
@@ -156,7 +156,7 @@ def test_storage_time_box_query(query_mock, test_config, tmpdir):
     query_mock.side_effect = _mock_query
     tap_client_ctor_orig = CadcTapClient.__init__
     CadcTapClient.__init__ = Mock(return_value=None)
-    utc_now = datetime.utcnow()
+    utc_now = datetime.now(tz=timezone.utc)
     prev_exec_date = utc_now - timedelta(seconds=3600)
     exec_date = utc_now - timedelta(seconds=1800)
     try:

@@ -67,7 +67,7 @@
 #
 
 from caom2 import TypedList, Chunk
-from caom2utils import FitsParser
+from caom2utils.parsers import FitsParser
 
 
 __all__ = ['add_headers_to_obs_by_blueprint']
