@@ -1133,6 +1133,8 @@ class TelescopeMapping:
                 update_artifact_meta(artifact, file_info)
                 self._update_artifact(artifact)
 
+        if isinstance(self._observation, DerivedObservation):
+            update_observation_members(self._observation)
         self._logger.debug('End update')
         return self._observation
 

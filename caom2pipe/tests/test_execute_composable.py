@@ -881,6 +881,7 @@ def test_data_visit_params(access_mock, client_mock, test_config, tmpdir):
         observable=ANY,
         clients=ANY,
         metadata_reader=ANY,
+        config=ANY,
     )
     data_visitor.visit.reset_mock()
 

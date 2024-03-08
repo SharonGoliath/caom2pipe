@@ -296,11 +296,11 @@ class CaomExecute:
         kwargs = {
             'working_directory': self._working_dir,
             'storage_name': self._storage_name,
-            # 'log_file_directory': self._log_file_directory,
             'log_file_directory': self._config.log_file_directory,
             'clients': self._clients,
             'observable': self.observable,
             'metadata_reader': self._metadata_reader,
+            'config': self._config,
         }
         for visitor in self._data_visitors:
             try:

@@ -145,6 +145,7 @@ __all__ = [
     'read_obs_from_file',
     'Rejected',
     'reverse_lookup',
+    'search_for_file',
     'StorageName',
     'State',
     'TaskType',
@@ -2220,26 +2221,7 @@ class StorageName:
         return pattern.match(self._file_name)
 
     def get_file_fqn(self, working_directory):
-        temp_f_name = os.path.basename(self.file_uri)
-        temp_fqn = os.path.join(working_directory, temp_f_name)
-        temp_obs_fqn = os.path.join(os.path.join(working_directory, self._obs_id), temp_f_name)
-        fqn = temp_fqn
-        if (
-            self._source_names is not None
-            and len(self._source_names) > 0
-            and os.path.exists(self._source_names[0])
-            # is there an uncompressed file name?
-            and self._source_names[0].endswith(temp_f_name)
-        ):
-            fqn = self._source_names[0]
-        elif os.path.exists(temp_fqn):
-            fqn = temp_fqn
-        elif os.path.exists(temp_obs_fqn):
-            fqn = temp_obs_fqn
-        elif len(self._source_names) > 0 and os.path.exists(self._source_names[0]):
-            # use the compressed file, if it can be found
-            fqn = self._source_names[0]
-        return fqn
+        return search_for_file(self, working_directory)
 
     def set_destination_uris(self):
         for entry in self._source_names:
@@ -2877,6 +2859,28 @@ def convert_to_days(exposure_time):
     :return:
     """
     return exposure_time / (24.0 * 3600.0)
+
+
+def search_for_file(storage_name, working_directory):
+    temp_fqn = os.path.join(working_directory, storage_name.file_name)
+    temp_obs_fqn = os.path.join(os.path.join(working_directory, storage_name.obs_id), storage_name.file_name)
+    fqn = temp_fqn
+    if (
+        storage_name.source_names is not None
+        and len(storage_name.source_names) > 0
+        and os.path.exists(storage_name.source_names[0])
+        # is there an uncompressed file name?
+        and storage_name.source_names[0].endswith(storage_name.file_name)
+    ):
+        fqn = storage_name.source_names[0]
+    elif os.path.exists(temp_fqn):
+        fqn = temp_fqn
+    elif os.path.exists(temp_obs_fqn):
+        fqn = temp_obs_fqn
+    elif len(storage_name.source_names) > 0 and os.path.exists(storage_name.source_names[0]):
+        # use the compressed file, if it can be found
+        fqn = storage_name.source_names[0]
+    return fqn
 
 
 def sizeof(x):
