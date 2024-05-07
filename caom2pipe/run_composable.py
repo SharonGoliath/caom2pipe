@@ -206,7 +206,7 @@ class TodoRunner:
         while len(self._todo_list) > 0:
             entry = self._todo_list.popleft()
             result |= self._process_entry(data_source, entry, current_count)
-        self._metadata_reader.reset()
+        # self._metadata_reader.reset()
         self._finish_run()
         self._logger.debug('End _run_todo_list.')
         return result

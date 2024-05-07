@@ -107,7 +107,6 @@ __all__ = [
     'build_uri',
     'Cache',
     'CadcException',
-
     'CaomName',
     'compare_observations',
     'Config',
@@ -534,6 +533,35 @@ class ExecutionReporter:
             self._summary.add_rejections(1)
         self._logger.debug('End capture_failure')
 
+    def capture_failure_2(self, entry, failure_message):
+        """Log an error message to the failure file.
+
+        If the failure is of a known type, also capture it to the rejected
+        list. The rejected list will be saved to disk when the execute method
+        completes.
+
+        :obs_id observation ID being processed
+        :file_name file name being processed
+        :e Exception to log - the entire stack trace, which, if logging
+            level is not set to debug, will be lost for debugging purposes.
+        """
+        self._logger.debug('Begin capture_failure_2')
+        self._summary.add_errors(1)
+        if self._is_timeout(failure_message):
+            self._summary.add_timeouts(1)
+        with open(self._failure_fqn, 'a') as failure:
+            failure.write(f'{datetime.now()} {entry} {failure_message}\n')
+
+        # only retry entries that are not permanently marked as rejected
+        reason = Rejected.known_failure(failure_message)
+        if reason == Rejected.NO_REASON or self._is_timeout(failure_message):
+            with open(self._retry_fqn, 'a') as retry:
+                retry.write(f'{entry}\n')
+        else:
+            self._observable.rejected.record(reason, entry)
+            self._summary.add_rejections(1)
+        self._logger.debug('End capture_failure_2')
+
     def capture_success(self, obs_id, file_name, start_time):
         """Capture, with a timestamp, the successful observations/file names that have been processed.
         :param obs_id str observation ID being processed
@@ -548,6 +576,24 @@ class ExecutionReporter:
             success.write(f'{datetime.now()} {obs_id} {file_name} {execution_s:.2f}\n')
         finally:
             success.close()
+        msg = (
+            f'Progress - record {self._summary.success} of {self._summary.entries} records processed in '
+            f'{execution_s:.2f} s.'
+        )
+        self._logger.debug('*' * len(msg))
+        self._logger.info(msg)
+        self._logger.debug('*' * len(msg))
+
+    def capture_success_2(self, entry, start_time):
+        """Capture, with a timestamp, the successful entries that have been processed.
+        :param entry str processing unit
+        :param start_time int seconds since beginning of execution.
+        """
+        self._logger.debug('Begin capture_success')
+        self._summary.add_successes(1)
+        execution_s = datetime.now(tz=timezone.utc).timestamp() - start_time
+        with open(self._success_fqn, 'a') as success:
+            success.write(f'{datetime.now()} {entry} {execution_s:.2f}\n')
         msg = (
             f'Progress - record {self._summary.success} of {self._summary.entries} records processed in '
             f'{execution_s:.2f} s.'
@@ -588,6 +634,41 @@ class ExecutionReporter:
                     else:
                         result.append(bits[3])
         return result
+
+
+class ExecutionReporter2(ExecutionReporter):
+
+    def __init__(self, config):
+        super().__init__(config, observable=None)
+
+    def capture_failure_2(self, entry, failure_message):
+        """Log an error message to the failure file.
+
+        If the failure is of a known type, also capture it to the rejected
+        list. The rejected list will be saved to disk when the execute method
+        completes.
+
+        :obs_id observation ID being processed
+        :file_name file name being processed
+        :e Exception to log - the entire stack trace, which, if logging
+            level is not set to debug, will be lost for debugging purposes.
+        """
+        self._logger.debug('Begin capture_failure_2')
+        self._summary.add_errors(1)
+        if self._is_timeout(failure_message):
+            self._summary.add_timeouts(1)
+        with open(self._failure_fqn, 'a') as failure:
+            failure.write(f'{datetime.now()} {entry} {failure_message}\n')
+
+        # only retry entries that are not permanently marked as rejected
+        reason = Rejected.known_failure(failure_message)
+        if reason == Rejected.NO_REASON or self._is_timeout(failure_message):
+            with open(self._retry_fqn, 'a') as retry:
+                retry.write(f'{entry}\n')
+        else:
+            self._observable.rejected.record(reason, entry)
+            self._summary.add_rejections(1)
+        self._logger.debug('End capture_failure_2')
 
 
 class ExecutionSummary:
@@ -803,6 +884,47 @@ class Observable:
     @property
     def metrics(self):
         return self._metrics
+
+
+class Observable2(Observable):
+
+    def __init__(self, config):
+        super().__init__(config)
+        self._reporter = ExecutionReporter2(config)
+        self._reporter.set_log_location(config)
+
+    @property
+    def reporter(self):
+        return self._reporter
+
+    def capture_failure(self, entry, failure_message):
+        """Log an error message to the failure file.
+
+        If the failure is of a known type, also capture it to the rejected
+        list. The rejected list will be saved to disk when the execute method
+        completes.
+
+        :obs_id observation ID being processed
+        :file_name file name being processed
+        :e Exception to log - the entire stack trace, which, if logging
+            level is not set to debug, will be lost for debugging purposes.
+        """
+        self._logger.debug('Begin capture_failure')
+        self._reporter._summary.add_errors(1)
+        if self._reporter._is_timeout(failure_message):
+            self._reporter._summary.add_timeouts(1)
+        with open(self._reporter._failure_fqn, 'a') as failure:
+            failure.write(f'{datetime.now()} {entry} {failure_message}\n')
+
+        # only retry entries that are not permanently marked as rejected
+        reason = Rejected.known_failure(failure_message)
+        if reason == Rejected.NO_REASON or self._reporter._is_timeout(failure_message):
+            with open(self._reporter._retry_fqn, 'a') as retry:
+                retry.write(f'{entry}\n')
+        else:
+            self.rejected.record(reason, entry)
+            self._reporter._summary.add_rejections(1)
+        self._logger.debug('End capture_failure')
 
 
 class Cache:
