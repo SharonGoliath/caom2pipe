@@ -398,29 +398,12 @@ class CaomExecuteContext(CaomExecute):
         self._observable = observable
         # track whether the caom2repo call will be a create or an update
         self._caom2_update_needed = False
-        self._strategy_context = None
-
-    @property
-    def context(self):
-        return self._strategy_context
-
-    @context.setter
-    def context(self, value):
-        self._strategy_context = value
-        self._working_dir = os.path.join(self._config.working_directory, value.obs_id)
-        if self._config.log_to_file:
-            self._model_fqn = os.path.join(self._config.log_file_directory, f'{value.obs_id}.xml')
-        else:
-            self._model_fqn = os.path.join(self._working_dir, f'{value.obs_id}.xml')
-        self._decompressor = decompressor_factory(self._config, self._working_dir, self.log_level_as, value)
+        self._strategy = None
 
     def _caom2_read(self):
         """Retrieve the existing observation model metadata."""
         self._observation = clc.repo_get(
-            self._clients.metadata_client,
-            self._storage_name.collection,
-            self._storage_name.obs_id,
-            self._observable.metrics,
+            self._clients.metadata_client, self._config.collection, self._strategy.obs_id, self._observable.metrics
         )
         self._caom2_update_needed = False if self._observation is None else True
         if self._caom2_update_needed:
@@ -430,31 +413,21 @@ class CaomExecuteContext(CaomExecute):
         """Update an existing observation instance.  Assumes the obs_id
         values are set correctly."""
         if self._caom2_update_needed:
-            clc.repo_update(
-                self._clients.metadata_client,
-                self._observation,
-                self.observable.metrics,
-            )
+            clc.repo_update(self._clients.metadata_client, self._observation, self.observable.metrics)
         else:
-            clc.repo_create(
-                self._clients.metadata_client,
-                self._observation,
-                self._observable.metrics,
-            )
+            clc.repo_create(self._clients.metadata_client, self._observation, self._observable.metrics)
 
     def _visit_meta(self):
         """Execute metadata-only visitors on an Observation in
         memory."""
         if self._meta_visitors:
             kwargs = {
-                'working_directory': self._working_dir,
                 'config': self._config,
                 'clients': self._clients,
-                'storage_name': self._storage_name,
-                'strategy_context': self._strategy_context,
-                'observable': self.observable,
+                'strategy': self._strategy,
+                'observable': self._observable,
             }
-            for visitor in self.meta_visitors:
+            for visitor in self._meta_visitors:
                 try:
                     self._observation = visitor.visit(self._observation, **kwargs)
                     if self._observation is None:
@@ -478,13 +451,18 @@ class CaomExecuteContext(CaomExecute):
     def _write_model(self):
         """Write an observation to disk from memory, represented in XML."""
         if self._observation is not None:
-            self._logger.debug(f'Write model to {self._model_fqn}.')
+            self._logger.error(f'Write model to {self._model_fqn}.')
             mc.write_obs_to_file(self._observation, self._model_fqn)
 
     def execute(self, context):
         self._logger.debug('Begin execute')
         self._logger.debug('the steps:')
-        self.context = context.get('strategy_context')
+        self._strategy = context.get('hierarchy')
+        if self._config.log_to_file:
+            self._model_fqn = os.path.join(self._config.log_file_directory, f'{self._strategy.obs_id}.xml')
+        else:
+            self._model_fqn = os.path.join(self._strategy.working_directory, f'{self._strategy.obs_id}.xml')
+        self._decompressor = context_decompressor_factory(self._config, self.log_level_as, self._strategy)
 
 
 class MetaVisitDeleteCreate(CaomExecute):
@@ -1379,6 +1357,15 @@ class OrganizeWithContext(OrganizeExecutes):
         )
         self._strategy_context = strategy_context
 
+    def _clean_up_workspace(self, key):
+        raise NotImplementedError
+
+    def _create_workspace(self, key):
+        raise NotImplementedError
+
+    def _set_up_file_logging(self, key):
+        raise NotImplementedError
+
     def choose(self, meta_visitors, data_visitors):
         """The logic that decides which descendants of CaomExecute to instantiate. This is based on the content of
         the config.yml file for an application.
@@ -1487,24 +1474,24 @@ class OrganizeWithContext(OrganizeExecutes):
         result = 0
         result_message = None
         if len(self._executors) > 0:
-            n = os.path.basename(entry)
-            for d in self._config.data_source_extensions:
-                n = n.replace(d, '')
-            self._set_up_file_logging(n)
-            self._create_workspace(n)
             try:
-                self._strategy_context.expand(entry)
+                # TODO - evaluate where the cardinality handling should be
+                # shoud the for loop be here, or in the CaomExecutes specializations?
+                # well, probably here, because here it only has to happen once - does that make
+                # anything more expensive than it should be?
+                hierarchies = self._strategy_context.expand(entry)
+                self._logger.debug(f'Found {len(hierarchies)} entries for {entry}.')
                 # keep a list of the successes to remove from memory, otherwise the metadata may still be
                 # required for retries
                 unset_keys = []
-                for hierarchy in self._strategy_context.hierarchies.values():
+                for hierarchy in hierarchies.values():
                     if hierarchy.is_valid():
                         if self.is_rejected(hierarchy):
                             self._reporter.capture_failure(hierarchy, BaseException('StorageName.is_rejected'), 'Rejected')
                             # successful rejection of the execution case
                             result = 0
                         else:
-                            context = {'strategy_context': hierarchy}
+                            context = {'hierarchy': hierarchy}
                             for executor in self._executors:
                                 self._logger.info(f'Task with {executor.__class__.__name__} for {hierarchy.obs_id}')
                                 executor.execute(context)
@@ -1512,6 +1499,7 @@ class OrganizeWithContext(OrganizeExecutes):
                     else:
                         result = -1
                         result_message = 'Invalid name format'
+                # keep failed hierarchy information for retries
                 self._strategy_context.unset(unset_keys)
             except Exception as e:
                 result_message = f'{entry} failed execute with {e}'
@@ -1519,14 +1507,24 @@ class OrganizeWithContext(OrganizeExecutes):
                 self._logger.error(traceback.format_exc())
                 result = -1
             finally:
-                self._clean_up_workspace(n)
-                self._unset_file_logging()
+                self._strategy_context.clean_up_workspace()
+                self._strategy_context.unset_file_logging()
         else:
             self._logger.info(f'No executors for {entry}')
             result = -1
             result_message = 'No executors'
         self._logger.debug(f'End do_one with result {result}, message {result_message}')
         return result, result_message
+
+
+def context_decompressor_factory(config, log_level_as, strategy):
+    result = None
+    if config.collection == 'CFHT':
+        result = FitsForCADCCompressor(strategy.working_directory, log_level_as, strategy)
+    else:
+        result = FitsForCADCDecompressor(strategy.working_directory, log_level_as)
+    logging.debug(f'Built {result.__class__.__name__} Fits Compression handling class.')
+    return result
 
 
 def decompressor_factory(config, working_directory, log_level_as, storage_name):

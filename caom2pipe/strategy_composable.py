@@ -70,10 +70,11 @@ import logging
 import re
 import traceback
 
-from os.path import basename
+from os import listdir, remove, rmdir
+from os.path import basename, exists, join
 from urllib.parse import urlparse
 
-from caom2pipe.manage_composable import build_uri, search_for_file
+from caom2pipe.manage_composable import build_uri, create_dir, search_for_file, TaskType
 
 
 class HierarchyStrategy:
@@ -125,6 +126,7 @@ class HierarchyStrategy:
         self.set_destination_uris()
         self.set_obs_id()
         self.set_product_id()
+        self._working_directory = None
         self._logger.debug(self)
 
     def __str__(self):
@@ -222,6 +224,10 @@ class HierarchyStrategy:
         """The thumbnail URI."""
         return build_uri(scheme=HierarchyStrategy.preview_scheme, archive=HierarchyStrategy.collection, file_name=self.thumb)
 
+    @property
+    def working_directory(self):
+        return self._working_directory
+
     def is_valid(self):
         """:return True if the observation ID conforms to naming rules."""
         pattern = re.compile(HierarchyStrategy.collection_pattern)
@@ -267,19 +273,75 @@ class HierarchyStrategyContext:
     """This class takes one execution unit, and does the work, usually external to CADC, to make the HierarchyStrategy
     instances for it."""
 
-    def __init__(self, clients):
+    def __init__(self, clients, config):
+        self._clients = clients
+        self._config = config
         self._hierarchies = {}
+        self._log_h = None
+        self._key = None
+        self._working_directory = None
         self._logger = logging.getLogger(self.__class__.__name__)
 
     @property
     def hierarchies(self):
         return self._hierarchies
 
+    def _expand(self, entry):
+        raise NotImplementedError
+
+    def clean_up_workspace(self):
+        """Remove a directory and all its contents. Only do this if there is not a 'SCRAPE' task type, since the
+        point of scraping is to be able to look at the pipeline execution artefacts once the processing is done.
+        """
+        if exists(self._working_directory) and TaskType.SCRAPE not in self._config.task_types:
+            for ii in listdir(self._working_directory):
+                remove(join(self._working_directory, ii))
+            rmdir(self._working_directory)
+        self._logger.debug(f'Removed working directory {self._working_directory} and contents.')
+
+    def create_workspace(self):
+        """Create the working area if it does not already exist."""
+        self._logger.error(f'Create working directory {self._working_directory}')
+        create_dir(self._working_directory)
+
     def expand(self, entry):
         """Takes one entry and turns that into n hierarchies. """
-        raise NotImplementedError
+        self._key = basename(entry)
+        for d in self._config.data_source_extensions:
+            self._key = self._key.replace(d, '')
+        self._working_directory = join(self._config.working_directory, self._key)
+        self.set_up_file_logging()
+        self.create_workspace()
+        hierarchies = self._expand(entry)
+        for hierarchy in hierarchies.values():
+            hierarchy._working_directory = self._working_directory
+        return hierarchies
+
+    def set_up_file_logging(self):
+        """Configure logging to a separate file for each entry being processed.
+
+        If log_to_file is set to False, don't create a separate log file for each entry, because the application
+        should leave as small a logging trace as possible.
+
+        """
+        if self._config.log_to_file:
+            log_fqn = join(self._config.working_directory, f'{self._key}.log')
+            if self._config.log_file_directory is not None:
+                log_fqn = join(self._config.log_file_directory, f'{self._key}.log')
+            self._log_h = logging.FileHandler(log_fqn)
+            formatter = logging.Formatter('%(asctime)s:%(levelname)s:%(name)-12s:%(lineno)d:%(message)s')
+            self._log_h.setLevel(self._config.logging_level)
+            self._log_h.setFormatter(formatter)
+            logging.getLogger().addHandler(self._log_h)
 
     def unset(self, keys):
         for key in keys:
             self._hierarchies.pop(key)
             self._logger.debug(f'Removing {key} from list of storage names.')
+
+    def unset_file_logging(self):
+        """Turn off the logging to the separate file for each entry being processed."""
+        if self._config.log_to_file:
+            logging.getLogger().removeHandler(self._log_h)
+            self._log_h.flush()
+            self._log_h.close()
