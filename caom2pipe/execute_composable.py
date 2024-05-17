@@ -413,7 +413,7 @@ class CaomExecuteContext(CaomExecute):
         """Update an existing observation instance.  Assumes the obs_id
         values are set correctly."""
         if self._caom2_update_needed:
-            clc.repo_update(self._clients.metadata_client, self._observation, self.observable.metrics)
+            clc.repo_update(self._clients.metadata_client, self._observation, self._observable.metrics)
         else:
             clc.repo_create(self._clients.metadata_client, self._observation, self._observable.metrics)
 
@@ -451,7 +451,7 @@ class CaomExecuteContext(CaomExecute):
     def _write_model(self):
         """Write an observation to disk from memory, represented in XML."""
         if self._observation is not None:
-            self._logger.error(f'Write model to {self._model_fqn}.')
+            self._logger.debug(f'Write model to {self._model_fqn}.')
             mc.write_obs_to_file(self._observation, self._model_fqn)
 
     def execute(self, context):
