@@ -355,25 +355,20 @@ class CaomExecute:
         return lookup.get(logging_level, ('', logging.info))
 
 
-class CaomExecuteExpander(CaomExecute):
+class CaomExecuteContext(CaomExecute):
     def __init__(self, config, meta_visitors, clients, observable):
         """
-        :param config: Configurable parts of execution, as stored in
-            manage_composable.Config.
-        :param meta_visitors: List of classes with a
-            'visit(observation, **kwargs)' method signature. Requires access
-            to metadata only.
+        :param config: Configurable parts of execution, as stored in manage_composable.Config.
+        :param meta_visitors: List of classes with a 'visit(observation, **kwargs)' method signature. Requires access
+          to metadata only.
         :param observable: things that last longer than a pipeline execution
-        :param metadata_reader: instance of MetadataReader, for retrieving
-            metadata, for implementations that visit on metadata only.
-        :param clients: instance of ClientCollection, for passing around
-            long-lived https sessions, mostly
+        :param metadata_reader: instance of MetadataReader, for retrieving metadata, for implementations that visit
+          on metadata only.
+        :param clients: instance of ClientCollection, for passing around long-lived https sessions, mostly
         """
         self._logger = logging.getLogger(self.__class__.__name__)
         self._logger.setLevel(config.logging_level)
-        formatter = logging.Formatter(
-            '%(asctime)s:%(levelname)s:%(name)-12s:%(lineno)d:%(message)s'
-        )
+        formatter = logging.Formatter('%(asctime)s:%(levelname)s:%(name)-12s:%(lineno)d:%(message)s')
         for handler in self._logger.handlers:
             handler.setLevel(config.logging_level)
             handler.setFormatter(formatter)
@@ -385,7 +380,7 @@ class CaomExecuteExpander(CaomExecute):
         # self._config = config
         # self._working_dir = None
         self._model_fqn = None
-        self._storage_name = None
+        # self._storage_name = None
         self._decompressor = None
         # if clients is not None:
         #     self.cadc_client = clients.data_client
@@ -403,19 +398,20 @@ class CaomExecuteExpander(CaomExecute):
         self._observable = observable
         # track whether the caom2repo call will be a create or an update
         self._caom2_update_needed = False
+        self._strategy_context = None
 
     @property
-    def storage_name(self):
-        return self._storage_name
+    def context(self):
+        return self._strategy_context
 
-    @storage_name.setter
-    def storage_name(self, value):
-        self._storage_name = value
+    @context.setter
+    def context(self, value):
+        self._strategy_context = value
         self._working_dir = os.path.join(self._config.working_directory, value.obs_id)
         if self._config.log_to_file:
-            self._model_fqn = os.path.join(self._config.log_file_directory, value.model_file_name)
+            self._model_fqn = os.path.join(self._config.log_file_directory, f'{value.obs_id}.xml')
         else:
-            self._model_fqn = os.path.join(self._working_dir, value.model_file_name)
+            self._model_fqn = os.path.join(self._working_dir, f'{value.obs_id}.xml')
         self._decompressor = decompressor_factory(self._config, self._working_dir, self.log_level_as, value)
 
     def _caom2_read(self):
@@ -449,13 +445,13 @@ class CaomExecuteExpander(CaomExecute):
     def _visit_meta(self):
         """Execute metadata-only visitors on an Observation in
         memory."""
-        if self.meta_visitors:
+        if self._meta_visitors:
             kwargs = {
                 'working_directory': self._working_dir,
                 'config': self._config,
                 'clients': self._clients,
                 'storage_name': self._storage_name,
-                'expander': self._expander,
+                'strategy_context': self._strategy_context,
                 'observable': self.observable,
             }
             for visitor in self.meta_visitors:
@@ -488,7 +484,7 @@ class CaomExecuteExpander(CaomExecute):
     def execute(self, context):
         self._logger.debug('Begin execute')
         self._logger.debug('the steps:')
-        self.storage_name = context.get('storage_name')
+        self.context = context.get('strategy_context')
 
 
 class MetaVisitDeleteCreate(CaomExecute):
@@ -577,7 +573,7 @@ class MetaVisit(CaomExecute):
         self._logger.debug('End execute')
 
 
-class MetaVisitExpander(CaomExecuteExpander):
+class MetaVisitExpander(CaomExecuteContext):
     """
     Defines the pipeline step for Collection creation or augmentation by a visitor of metadata into CAOM.
     """
@@ -740,7 +736,7 @@ class DataScrape(DataVisit):
         self._logger.debug('End execute')
 
 
-class DataScrapeExpander(DataVisit):
+class DataScrapeContext(DataVisit):
     """Defines the pipeline step for Collection generation and ingestion of
     operations that require access to the file on disk, with no update to the
     service at the end. This class assumes it has access to the files on disk.
@@ -949,6 +945,29 @@ class Scrape(CaomExecute):
         self._logger.debug(f'End execute')
 
 
+class ScrapeContext(CaomExecuteContext):
+    """Defines the pipeline step for Collection creation of a CAOM model
+    observation. The file containing the metadata is located on disk.
+    No record is written to a web service."""
+
+    def __init__(self, config, meta_visitors, observable):
+        super().__init__(config, meta_visitors=meta_visitors, clients=None, observable=observable)
+
+    def execute(self, context):
+        super().execute(context)
+
+        self._logger.debug('get observation for the existing model from disk')
+        self._read_model()
+
+        self._logger.debug('the metadata visitors')
+        self._visit_meta()
+
+        self._logger.debug('write the updated xml to disk for debugging')
+        self._write_model()
+
+        self._logger.debug(f'End execute')
+
+
 class NoFheadScrape(CaomExecute):
     """Defines the pipeline step for Defines a pipeline step for all the operations that require access to the file
     on disk for metadata and data operations without internet access. The file is located on disk.
@@ -987,7 +1006,7 @@ class NoFheadScrape(CaomExecute):
         self._logger.debug(f'End execute')
 
 
-class NoFheadScrapeExpander(CaomExecuteExpander):
+class NoFheadScrapeExpander(CaomExecuteContext):
     """Defines the pipeline step for Defines a pipeline step for all the operations that require access to the file
     on disk for metadata and data operations without internet access. The file is located on disk.
     No record is written to a web service."""
@@ -1343,9 +1362,9 @@ class OrganizeExecutes:
         return result
 
 
-class OrganizeWithExpander(OrganizeExecutes):
+class OrganizeWithContext(OrganizeExecutes):
 
-    def __init__(self, config, expander, clients, observable):
+    def __init__(self, config, strategy_context, clients, observable):
         super().__init__(
             config,
             meta_visitors=None,
@@ -1358,7 +1377,7 @@ class OrganizeWithExpander(OrganizeExecutes):
             observable=observable,
             reporter=observable.reporter,
         )
-        self._expander = expander
+        self._strategy_context = strategy_context
 
     def choose(self, meta_visitors, data_visitors):
         """The logic that decides which descendants of CaomExecute to instantiate. This is based on the content of
@@ -1406,7 +1425,7 @@ class OrganizeWithExpander(OrganizeExecutes):
                 if task_type == mc.TaskType.SCRAPE:
                     if self._config.use_local_files:
                         self._logger.debug(f'Choosing executor Scrape for {task_type}.')
-                        self._executors.append(Scrape(self._config,  meta_visitors, self._metadata_reader))
+                        self._executors.append(ScrapeContext(self._config,  meta_visitors, self._observable))
 
                     else:
                         raise mc.CadcException('use_local_files must be True with Task Type "SCRAPE"')
@@ -1474,26 +1493,26 @@ class OrganizeWithExpander(OrganizeExecutes):
             self._set_up_file_logging(n)
             self._create_workspace(n)
             try:
-                self._expander.expand(entry)
+                self._strategy_context.expand(entry)
                 # keep a list of the successes to remove from memory, otherwise the metadata may still be
                 # required for retries
                 unset_keys = []
-                for storage_name in self._expander.storage_names.values():
-                    if storage_name.is_valid():
-                        if self.is_rejected(storage_name):
-                            self._reporter.capture_failure(storage_name, BaseException('StorageName.is_rejected'), 'Rejected')
+                for hierarchy in self._strategy_context.hierarchies.values():
+                    if hierarchy.is_valid():
+                        if self.is_rejected(hierarchy):
+                            self._reporter.capture_failure(hierarchy, BaseException('StorageName.is_rejected'), 'Rejected')
                             # successful rejection of the execution case
                             result = 0
                         else:
-                            context = {'storage_name': storage_name}
+                            context = {'strategy_context': hierarchy}
                             for executor in self._executors:
-                                self._logger.info(f'Task with {executor.__class__.__name__} for {storage_name.obs_id}')
+                                self._logger.info(f'Task with {executor.__class__.__name__} for {hierarchy.obs_id}')
                                 executor.execute(context)
-                            unset_keys.append(storage_name.file_uri)
+                            unset_keys.append(hierarchy.file_uri)
                     else:
                         result = -1
                         result_message = 'Invalid name format'
-                self._expander.unset(unset_keys)
+                self._strategy_context.unset(unset_keys)
             except Exception as e:
                 result_message = f'{entry} failed execute with {e}'
                 self._logger.warning(result_message)
@@ -1506,7 +1525,7 @@ class OrganizeWithExpander(OrganizeExecutes):
             self._logger.info(f'No executors for {entry}')
             result = -1
             result_message = 'No executors'
-        self._logger.debug('End do_one')
+        self._logger.debug(f'End do_one with result {result}, message {result_message}')
         return result, result_message
 
 

@@ -644,14 +644,13 @@ class ExecutionReporter2(ExecutionReporter):
     def capture_failure_2(self, entry, failure_message):
         """Log an error message to the failure file.
 
-        If the failure is of a known type, also capture it to the rejected
-        list. The rejected list will be saved to disk when the execute method
-        completes.
+        If the failure is of a known type, also capture it to the rejected list. The rejected list will be saved to
+        disk when the execute method completes.
 
         :obs_id observation ID being processed
         :file_name file name being processed
-        :e Exception to log - the entire stack trace, which, if logging
-            level is not set to debug, will be lost for debugging purposes.
+        :e Exception to log - the entire stack trace, which, if logging level is not set to debug, will be lost
+            for debugging purposes.
         """
         self._logger.debug('Begin capture_failure_2')
         self._summary.add_errors(1)
@@ -884,6 +883,10 @@ class Observable:
     @property
     def metrics(self):
         return self._metrics
+
+    @property
+    def reporter(self):
+        return self._reporter
 
 
 class Observable2(Observable):

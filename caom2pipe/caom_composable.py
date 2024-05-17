@@ -1163,7 +1163,101 @@ class TelescopeMapping:
                         f'{self._storage_name.file_uri}. Continuing.'
                     )
                     continue
-                update_artifact_meta(artifact, file_info)
+                if file_info:
+                    update_artifact_meta(artifact, file_info)
+                self._update_artifact(artifact)
+
+        if isinstance(self._observation, DerivedObservation):
+            update_observation_members(self._observation)
+        self._logger.debug('End update')
+        return self._observation
+
+    def _init_read_groups(self, config):
+        for entry in config.data_read_groups:
+            self._data_read_groups.add(entry)
+        for entry in config.meta_read_groups:
+            self._meta_read_groups.add(entry)
+
+    def _update_artifact(self, artifact):
+        """
+        :param artifact: Artifact instance
+        :return:
+        """
+        raise NotImplementedError
+
+    def _update_plane(self, plane):
+        self._update_groups(plane.data_read_groups, self._data_read_groups)
+        self._update_groups(plane.meta_read_groups, self._meta_read_groups)
+
+    @staticmethod
+    def _update_groups(replace_these, with_these):
+        if len(with_these) > 0:
+            while len(replace_these) > 0:
+                replace_these.pop()
+            for entry in with_these:
+                replace_these.add(entry)
+
+
+class TelescopeMapping2:
+    """
+    A default implementation for building up and applying an ObsBlueprint
+    map for a file, and then doing any n:n (FITS keywords:CAOM2 keywords)
+    mapping, using the 'update' method.
+    """
+    def __init__(self, strategy, clients, observable=None, observation=None, config=None):
+        self._strategy = strategy
+        self._meta_producer = observable.meta_producer if observable is not None else None
+        self._headers = strategy.metadata
+        self._clients = clients
+        self._observable = observable
+        self._observation = observation
+        self._meta_read_groups = URISet()
+        self._data_read_groups = URISet()
+        self._init_read_groups(config)
+        self._logger = logging.getLogger(self.__class__.__name__)
+
+    @property
+    def observation(self):
+        return self._observation
+
+    @observation.setter
+    def observation(self, value):
+        self._observation = value
+
+    def accumulate_blueprint(self, bp):
+        """
+        Configure the telescope-specific ObsBlueprint at the CAOM model Observation level.
+        """
+        self._logger.debug(f'Begin accumulate_blueprint for {self._strategy.file_uri}')
+        bp.set('Observation.metaProducer', self._meta_producer)
+        bp.set('Plane.metaProducer', self._meta_producer)
+        bp.set('Artifact.metaProducer', self._meta_producer)
+        bp.set('Chunk.metaProducer', self._meta_producer)
+
+    def update(self):
+        """
+        Update the Artifact file-based metadata. Override if it's necessary to carry out more/different updates.
+
+        :param file_info: FileInfo instance
+        :return: Observation self._observation instance
+        """
+        self._logger.debug(f'Begin update for {self._observation.observation_id}')
+        self._update_groups(self._observation.meta_read_groups, self._meta_read_groups)
+        for plane in self._observation.planes.values():
+            if plane.product_id != self._strategy.product_id:
+                self._logger.debug(
+                    f'Product ID is {plane.product_id} but working on {self._strategy.product_id}. Continuing.'
+                )
+                continue
+            self._update_plane(plane)
+            for artifact in plane.artifacts.values():
+                if artifact.uri != self._strategy.file_uri:
+                    self._logger.debug(
+                        f'Artifact uri is {artifact.uri} but working on {self._strategy.file_uri}. Continuing.'
+                    )
+                    continue
+                if self._strategy.file_info:
+                    update_artifact_meta(artifact, self._strategy.file_info)
                 self._update_artifact(artifact)
 
         if isinstance(self._observation, DerivedObservation):
