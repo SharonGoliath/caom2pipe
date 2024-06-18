@@ -248,9 +248,11 @@ class HierarchyStrategy:
                     )
                 )
             else:
-                self._destination_uris.append(
-                    build_uri(HierarchyStrategy.scheme, HierarchyStrategy.collection, basename(temp.path))
-                )
+                self._destination_uris.append(build_uri(
+                                                scheme=HierarchyStrategy.scheme,
+                                                archive=HierarchyStrategy.collection,
+                                                file_name=basename(temp.path),
+                    ))
 
     def set_obs_id(self, **kwargs):
         if self._obs_id is None:
