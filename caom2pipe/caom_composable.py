@@ -1386,3 +1386,87 @@ class Fits2caom2Visitor:
 
         self._logger.debug('End visit')
         return self._observation
+
+
+
+class Fits2caom2Visitor2(mc.Visitor):
+    """
+    Use a TelescopeMapping specialization instance to create a CAOM2
+    record, as expected by the execute_composable.MetaVisits class.
+    """
+
+    def __init__(self, uses_data=False):
+        self._uses_data = uses_data
+        self._logger = logging.getLogger(self.__class__.__name__)
+
+    def _get_blueprint(self, instantiated_class):
+        return ObsBlueprint(instantiated_class=instantiated_class)
+
+    def _get_parser(self, headers, blueprint, uri):
+        if headers is None or len(headers) == 0:
+            self._logger.debug(f'No headers, using a BlueprintParser for {uri}')
+            parser = BlueprintParser(blueprint, uri)
+        else:
+            self._logger.debug(f'Using a FitsParser for {uri}')
+            parser = FitsParser(headers, blueprint, uri)
+        self._logger.debug(f'Created {parser.__class__.__name__} parser for {uri}.')
+        return parser
+
+    def _get_mapping(self, clients, config, observable, observation, strategy, dest_uri):
+        return TelescopeMapping2(strategy, clients, observable, observation, config)
+
+    def visit(self, observation, **kwargs):
+        strategy = kwargs.get('strategy')
+        clients = kwargs.get('clients')
+        observable = kwargs.get('observable')
+        config = kwargs.get('config')
+        self._logger.debug('Begin visit')
+        try:
+            for uri in strategy.destination_uris:
+                self._logger.debug(f'Build observation for {uri}')
+                telescope_data = self._get_mapping(clients, config, observable, observation, strategy, uri)
+                if telescope_data is None:
+                    self._logger.info(f'Ignoring {uri} because there is no TelescopeMapping.')
+                    continue
+                blueprint = self._get_blueprint(telescope_data)
+                telescope_data.accumulate_blueprint(blueprint)
+                if config.dump_blueprint and config.log_to_file:
+                    with open(f'{config.log_file_directory}/{os.path.basename(uri)}.bp', 'w') as f:
+                        f.write(blueprint.__str__())
+                parser = self._get_parser(strategy.metadata, blueprint, uri)
+
+                if self._observation is None:
+                    if blueprint._get('DerivedObservation.members') is None:
+                        self._logger.debug('Build a SimpleObservation')
+                        self._observation = SimpleObservation(
+                            collection=strategy.collection,
+                            observation_id=strategy.obs_id,
+                            algorithm=Algorithm('exposure'),
+                        )
+                    else:
+                        self._logger.debug('Build a DerivedObservation')
+                        algorithm_name =(
+                            'composite'
+                            if blueprint._get('Observation.algorithm.name') == 'exposure'
+                            else blueprint._get('Observation.algorithm.name')
+                        )
+                        self._observation = DerivedObservation(
+                            collection=strategy.collection,
+                            observation_id=strategy.obs_id,
+                            algorithm=Algorithm(algorithm_name),
+                        )
+                    telescope_data.observation = observation
+                parser.augment_observation(
+                    observation=observation,
+                    artifact_uri=uri,
+                    product_id=strategy.product_id,
+                )
+
+                observation = telescope_data.update()
+        except Caom2Exception as e:
+            self._logger.debug(traceback.format_exc())
+            self._logger.warning(f'CAOM2 record creation failed for {strategy.obs_id}:{strategy.file_name} with {e}')
+            observation = None
+
+        self._logger.debug('End visit')
+        return observation

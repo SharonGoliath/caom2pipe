@@ -3514,3 +3514,17 @@ class ValueRepairCache(Cache):
                 f'Repair {self._key} from {attribute_value} to {fixed}'
             )
         return fixed
+
+
+class Visitor:
+
+    def __init__(self, uses_data):
+        self._uses_data = uses_data
+
+    @property
+    def uses_data(self):
+        return self._uses_data
+
+    def visit(self, observation, **kwargs):
+        # the interface that existed before I got here
+        raise NotImplementedError

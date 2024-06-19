@@ -124,7 +124,7 @@ from caom2pipe import client_composable as clc
 from caom2pipe import manage_composable as mc
 from caom2pipe import transfer_composable as tc
 
-__all__ = ['CaomExecute', 'OrganizeExecutes', 'OrganizeChooser']
+__all__ = ['CaomExecute', 'CaomExecuteWithVisitors', 'OrganizeExecutes', 'OrganizeExecutesWithVisitors', 'OrganizeChooser']
 
 
 class CaomExecute:
@@ -356,7 +356,7 @@ class CaomExecute:
 
 
 class CaomExecuteContext(CaomExecute):
-    def __init__(self, config, meta_visitors, clients, observable):
+    def __init__(self, config, meta_visitors, data_visitors, clients, observable):
         """
         :param config: Configurable parts of execution, as stored in manage_composable.Config.
         :param meta_visitors: List of classes with a 'visit(observation, **kwargs)' method signature. Requires access
@@ -376,29 +376,17 @@ class CaomExecuteContext(CaomExecute):
             self.logging_level_param,
             self.log_level_as,
         ) = self._specify_logging_level_param(config.logging_level)
-        # self.root_dir = config.working_directory
-        # self._config = config
-        # self._working_dir = None
         self._model_fqn = None
-        # self._storage_name = None
         self._decompressor = None
-        # if clients is not None:
-        #     self.cadc_client = clients.data_client
-        #     self.caom_repo_client = clients.metadata_client
-        # self._clients = clients
+        self._data_visitors = data_visitors
         self._meta_visitors = meta_visitors
-        # self.observable = observable
-        # self.log_file_directory = None
-        # self._data_visitors = []
-        # self._store_transferrer = None
-        # self._metadata_reader = metadata_reader
         self._observation = None
         self._config = config
         self._clients = clients
         self._observable = observable
         # track whether the caom2repo call will be a create or an update
         self._caom2_update_needed = False
-        self._strategy = None
+        self._hierarchy = None
 
     def _caom2_read(self):
         """Retrieve the existing observation model metadata."""
@@ -417,6 +405,21 @@ class CaomExecuteContext(CaomExecute):
         else:
             clc.repo_create(self._clients.metadata_client, self._observation, self._observable.metrics)
 
+    def _visit_data(self):
+        """Execute the visitors that require access to the full data content of a file."""
+        kwargs = {
+            'clients': self._clients,
+            'config': self._config,
+            'observable': self._observable,
+            'strategy': self._strategy,
+        }
+        for visitor in self._data_visitors:
+            try:
+                self._logger.debug(f'Visit for {visitor.__class__.__name__}')
+                self._observation = visitor.visit(self._observation, **kwargs)
+            except Exception as e:
+                raise mc.CadcException(e)
+
     def _visit_meta(self):
         """Execute metadata-only visitors on an Observation in
         memory."""
@@ -424,14 +427,14 @@ class CaomExecuteContext(CaomExecute):
             kwargs = {
                 'config': self._config,
                 'clients': self._clients,
-                'strategy': self._strategy,
                 'observable': self._observable,
+                'strategy': self._strategy,
             }
             for visitor in self._meta_visitors:
                 try:
                     self._observation = visitor.visit(self._observation, **kwargs)
                     if self._observation is None:
-                        msg = f'No Observation for {self._storage_name.file_uri}. Construction failed.'
+                        msg = f'No Observation for {self._strategy.file_uri}. Construction failed.'
                         self._logger.error(f'Stopping _visit_meta with {msg}')
                         raise mc.CadcException(msg)
                 except Exception as e:
@@ -825,6 +828,63 @@ class NoFheadVisit(CaomExecute):
         self._logger.debug('initialize the metadata')
         self._metadata_reader.working_directory = self._working_dir
         self._metadata_reader.set(self._storage_name)
+
+        self._logger.debug('get the observation for the existing model')
+        self._caom2_read()
+
+        self._logger.debug('execute the meta visitors')
+        self._visit_meta()
+
+        self._logger.debug('execute the data visitors')
+        self._visit_data()
+
+        self._logger.debug('write the observation to disk for debugging')
+        self._write_model()
+
+        self._logger.debug('store the updated xml')
+        self._caom2_store()
+
+        self._logger.debug('End execute.')
+
+
+class NoFheadVisitContext(CaomExecuteContext):
+    """Defines a pipeline step for all the operations that require access to the file on disk for metdata and data
+    operations. This is to support HDF5 operations, since at the time of writing, there is no --fhead metadata
+    retrieval option for HDF5 files.
+
+    """
+
+    def __init__(
+        self,
+        config,
+        clients,
+        meta_visitors,
+        data_visitors,
+        observable,
+    ):
+        super().__init__(
+            config=config,
+            clients=clients,
+            meta_visitors=meta_visitors,
+            data_visitors=data_visitors,
+            observable=observable,
+        )
+
+    def execute(self, context):
+        super().execute(context)
+        # self._logger.debug('Begin execute with the steps:')
+        # self.storage_name = context.get('storage_name')
+
+        # TODO replace with a STAGE action
+
+        # self._logger.debug('get the input files')
+        # for entry in self._storage_name.destination_uris:
+        #     local_fqn = os.path.join(self._working_dir, os.path.basename(entry))
+        #     self._modify_transferrer.get(entry, local_fqn)
+
+        # self._logger.debug('initialize the metadata')
+        # self._metadata_reader.working_directory = self._working_dir
+        # self._metadata_reader.set(self._storage_name)
 
         self._logger.debug('get the observation for the existing model')
         self._caom2_read()
@@ -1340,9 +1400,191 @@ class OrganizeExecutes:
         return result
 
 
+class OrganizeExecutesWithVisitors:
+    """How to turn on/off various task types in a CaomExecute pipeline."""
+
+    def __init__(
+        self,
+        clients,
+        config,
+        metadata_reader,
+        modify_transfer,
+        observable,
+        store_transfer,
+        visitors,
+    ):
+        """
+        Why there is support for two transfer instances:
+        - the store_transfer instance may do an http, ftp, or vo transfer
+            from an external source, for the purposes of storage
+        - the modify_transfer instance probably does a CADC retrieval,
+            so that metadata production that relies on the data content
+            (e.g. preview generation) can occur
+
+        :param config:
+        :param meta_visitors List of metadata visit methods.
+        :param data_visitors List of data visit methods.
+        :param chooser:
+        :param store_transfer Transfer implementation for retrieving files
+        :param modify_transfer Transfer implementation for retrieving files
+        :param clients ClientCollection instance
+        :param metadata_reader client instance for reading headers,
+            passed on to to_caom2_client.
+        """
+        self._config = config
+        self.task_types = config.task_types
+        self._reporter = observable._reporter
+        self._observable = observable
+        self._visitors = visitors
+        self._modify_transfer = modify_transfer
+        self._store_transfer = store_transfer
+        self._clients = clients
+        self._metadata_reader = metadata_reader
+        self._log_h = None
+        self._executors = []
+        self._logger = logging.getLogger(self.__class__.__name__)
+        self._logger.setLevel(config.logging_level)
+
+    def _clean_up_workspace(self, obs_id):
+        """Remove a directory and all its contents. Only do this if there
+        is not a 'SCRAPE' task type, since the point of scraping is to
+        be able to look at the pipeline execution artefacts once the
+        processing is done.
+        """
+        working_dir = os.path.join(self._config.working_directory, obs_id)
+        if (
+            os.path.exists(working_dir)
+            and mc.TaskType.SCRAPE not in self._config.task_types
+        ):
+            for ii in os.listdir(working_dir):
+                os.remove(os.path.join(working_dir, ii))
+            os.rmdir(working_dir)
+        self._logger.debug(
+            f'Removed working directory {working_dir} and contents.'
+        )
+
+    def _create_workspace(self, obs_id):
+        """Create the working area if it does not already exist."""
+        working_dir = os.path.join(self._config.working_directory, obs_id)
+        self._logger.debug(f'Create working directory {working_dir}')
+        mc.create_dir(working_dir)
+
+    def is_rejected(self, storage_name):
+        """Common code to use the appropriate identifier when checking for
+        rejected entries."""
+        result = self._observable.rejected.is_bad_metadata(storage_name.file_name)
+        if result:
+            self._logger.info(
+                f'Rejected observation {storage_name.file_name} because of '
+                f'bad metadata'
+            )
+        return result
+
+    def _set_up_file_logging(self, storage_name):
+        """Configure logging to a separate file for each entry being
+        processed.
+
+        If log_to_file is set to False, don't create a separate log file for
+        each entry, because the application should leave as small a logging
+        trace as possible.
+
+        """
+        if self._config.log_to_file:
+            log_fqn = os.path.join(
+                self._config.working_directory, storage_name.log_file
+            )
+            if self._config.log_file_directory is not None:
+                log_fqn = os.path.join(
+                    self._config.log_file_directory, storage_name.log_file
+                )
+            self._log_h = logging.FileHandler(log_fqn)
+            formatter = logging.Formatter(
+                '%(asctime)s:%(levelname)s:%(name)-12s:%(lineno)d:%(message)s'
+            )
+            self._log_h.setLevel(self._config.logging_level)
+            self._log_h.setFormatter(formatter)
+            logging.getLogger().addHandler(self._log_h)
+
+    def _unset_file_logging(self):
+        """Turn off the logging to the separate file for each entry being
+        processed."""
+        if self._config.log_to_file:
+            logging.getLogger().removeHandler(self._log_h)
+            self._log_h.flush()
+            self._log_h.close()
+
+    def can_use_single_visit(self):
+        return (
+            len(self.task_types) > 1
+            and (
+                (mc.TaskType.STORE in self.task_types and mc.TaskType.INGEST in self.task_types)
+                or (mc.TaskType.INGEST in self.task_types and mc.TaskType.MODIFY in self.task_types)
+                or (mc.TaskType.SCRAPE in self.task_types and mc.TaskType.MODIFY in self.task_types)
+            )
+        )
+
+    def choose(self):
+        """The logic that decides which descendants of CaomExecute to
+        instantiate. This is based on the content of the config.yml file
+        for an application.
+        :destination_name StorageName extension that handles the naming rules
+            for a file.
+        """
+        result = executor_factory(
+            self._clients,
+            self._config,
+            self._metadata_reader,
+            self._modify_transfer,
+            self._observable,
+            self._store_transfer,
+            self._visitors,
+        )
+        self._executors = [result]
+
+    def do_one(self, storage_name):
+        """Process one entry.
+        :param storage_name instance of StorageName for the collection
+        """
+        self._logger.debug(f'Begin do_one {storage_name}')
+        self._set_up_file_logging(storage_name)
+        start_s = datetime.now(tz=timezone.utc).timestamp()
+        try:
+            if self.is_rejected(storage_name):
+                self._reporter.capture_failure_2(storage_name.file_name, 'Rejected')
+                # successful rejection of the execution case
+                result = 0
+            else:
+                self._create_workspace(storage_name.obs_id)
+                context = {'storage_name': storage_name}
+                for executor in self._executors:
+                    self._logger.info(
+                        f'Task with {executor.__class__.__name__} for '
+                        f'{storage_name.obs_id}'
+                    )
+                    executor.execute(context)
+                if len(self._executors) > 0:
+                    self._reporter.capture_success_2(storage_name.file_name, start_s)
+                    result = 0
+                else:
+                    self._logger.info(f'No executors for {storage_name}')
+                    # TODO
+                    result = -1  # cover case where file name validation fails
+        except Exception as e:
+            self._reporter.capture_failure_2(storage_name.file_name, str(e))
+            self._logger.warning(
+                f'Execution failed for {storage_name.obs_id} with {e}'
+            )
+            self._logger.error(traceback.format_exc())
+            result = -1
+        finally:
+            self._clean_up_workspace(storage_name.obs_id)
+            self._unset_file_logging()
+        return result
+
+
 class OrganizeWithContext(OrganizeExecutes):
 
-    def __init__(self, config, strategy_context, clients, observable):
+    def __init__(self, clients, config, observable, strategy_context, visitors):
         super().__init__(
             config,
             meta_visitors=None,
@@ -1355,7 +1597,9 @@ class OrganizeWithContext(OrganizeExecutes):
             observable=observable,
             reporter=observable.reporter,
         )
+        self._executor = None
         self._strategy_context = strategy_context
+        self._choose(visitors)
 
     def _clean_up_workspace(self, key):
         raise NotImplementedError
@@ -1366,154 +1610,60 @@ class OrganizeWithContext(OrganizeExecutes):
     def _set_up_file_logging(self, key):
         raise NotImplementedError
 
-    def choose(self, meta_visitors, data_visitors):
+    def _choose(self, visitors):
         """The logic that decides which descendants of CaomExecute to instantiate. This is based on the content of
         the config.yml file for an application.
         """
-        if self.can_use_single_visit():
-            if mc.TaskType.SCRAPE in self.task_types:
-                self._logger.debug(f'Choosing executor NoFheadSScrape for tasks {self.task_types}.')
-                self._executors.append(
-                    NoFheadScrapeExpander(
-                        self._config,
-                        meta_visitors,
-                        data_visitors,
-                        self._observable,
-                    )
-                )
-            elif mc.TaskType.STORE in self.task_types:
-                self._logger.debug(f'Choosing executor NoFheadStoreVisit for tasks {self.task_types}.')
-                self._executors.append(
-                    NoFheadStoreVisit(
-                        self._config,
-                        self._clients,
-                        self._store_transfer,
-                        meta_visitors,
-                        data_visitors,
-                        self._metadata_reader,
-                        self._observable,
-                    )
-                )
-            else:
-                self._logger.debug(f'Choosing executor NoFheadVisit for tasks {self.task_types}.')
-                self._executors.append(
-                    NoFheadVisit(
-                        self._config,
-                        self._clients,
-                        self._modify_transfer,
-                        meta_visitors,
-                        data_visitors,
-                        self._metadata_reader,
-                        self._observable,
-                    )
-                )
-        else:
-            for task_type in self.task_types:
-                if task_type == mc.TaskType.SCRAPE:
-                    if self._config.use_local_files:
-                        self._logger.debug(f'Choosing executor Scrape for {task_type}.')
-                        self._executors.append(ScrapeContext(self._config,  meta_visitors, self._observable))
+        self._executor = executor_factory_with_context(
+            self._clients, self._config, self._modify_transfer, self._observable, visitors
+        )
+        if self._executor is None:
+            raise mc.CadcException('Found no executor. Stopping execution, since nothing will happen.')
 
-                    else:
-                        raise mc.CadcException('use_local_files must be True with Task Type "SCRAPE"')
-                elif task_type == mc.TaskType.STORE:
-                    self._logger.debug(f'Choosing executor Store for {task_type}.')
-                    self._executors.append(
-                        Store(self._config, self._observable, self._clients, self._metadata_reader, self._store_transfer)
-                    )
-                elif task_type == mc.TaskType.INGEST:
-                    self._logger.debug(f'Choosing executor MetaVisit for {task_type}.')
-                    self._executors.append(
-                        MetaVisitExpander(self._config, meta_visitors, self._observable, self._clients)
-                    )
-                elif task_type == mc.TaskType.MODIFY:
-                    if self._config.use_local_files:
-                        if len(self._executors) > 0 and isinstance(self._executors[0], Scrape):
-                            self._logger.debug(f'Choosing executor DataScrape for {task_type}.')
-                            self._executors.append(DataScrape(self._config, data_visitors, self._metadata_reader))
-                        else:
-                            self._logger.debug(f'Choosing executor LocalDataVisit for {task_type}.')
-                            self._executors.append(
-                                LocalDataVisit(
-                                    self._config,
-                                    data_visitors,
-                                    self._observable,
-                                    self._clients,
-                                    self._metadata_reader,
-                                )
-                            )
-                    else:
-                        self._logger.debug(f'Choosing executor DataVisit for {task_type}.')
-                        self._executors.append(
-                            DataVisit(
-                                self._config,
-                                data_visitors,
-                                self._observable,
-                                self._modify_transfer,
-                                self._clients,
-                                self._metadata_reader,
-                            )
-                        )
-                elif task_type == mc.TaskType.VISIT:
-                    self._logger.debug(f'Choosing executor MetaVisit for {task_type}.')
-                    self._executors.append(
-                        MetaVisit(
-                            self._config, meta_visitors, self._observable, self._metadata_reader, self._clients
-                        )
-                    )
-                elif task_type == mc.TaskType.DEFAULT:
-                    pass
-                else:
-                    raise mc.CadcException(f'Do not understand task type {task_type}')
-
-    def do_one(self, entry):
+    def do(self, entry):
         """Process one entry.
         :param entry a string that can be used at a DataSource to identify work to be done
         """
         self._logger.debug(f'Begin do_one {entry}')
         result = 0
         result_message = None
-        if len(self._executors) > 0:
-            try:
-                # TODO - evaluate where the cardinality handling should be
-                # shoud the for loop be here, or in the CaomExecutes specializations?
-                # well, probably here, because here it only has to happen once - does that make
-                # anything more expensive than it should be?
-                hierarchies = self._strategy_context.expand(entry)
-                self._logger.debug(f'Found {len(hierarchies)} entries for {entry}.')
-                # keep a list of the successes to remove from memory, otherwise the metadata may still be
-                # required for retries
-                unset_keys = []
-                for hierarchy in hierarchies.values():
-                    if hierarchy.is_valid():
-                        if self.is_rejected(hierarchy):
-                            self._reporter.capture_failure(hierarchy, BaseException('StorageName.is_rejected'), 'Rejected')
-                            # successful rejection of the execution case
-                            result = 0
-                        else:
-                            context = {'hierarchy': hierarchy}
-                            for executor in self._executors:
-                                self._logger.info(f'Task with {executor.__class__.__name__} for {hierarchy.obs_id}')
-                                executor.execute(context)
-                            unset_keys.append(hierarchy.file_uri)
+        try:
+            # TODO - evaluate where the cardinality handling should be
+            # shoud the for loop be here, or in the CaomExecutes specializations?
+            # well, probably here, because here it only has to happen once - does that make
+            # anything more expensive than it should be?
+            hierarchies = self._strategy_context.expand(entry)
+            self._logger.debug(f'Found {len(hierarchies)} entries for {entry}.')
+            # keep a list of the successes to remove from memory, otherwise the metadata may still be
+            # required for retries
+            unset_keys = []
+            for hierarchy in hierarchies.values():
+                if hierarchy.is_valid():
+                    if self.is_rejected(hierarchy):
+                        # successful rejection of the execution case
+                        result = 0
+                        result_message = 'Rejected'
                     else:
-                        result = -1
-                        result_message = 'Invalid name format'
-                # keep failed hierarchy information for retries
-                self._strategy_context.unset(unset_keys)
-            except Exception as e:
-                result_message = f'{entry} failed execute with {e}'
-                self._logger.warning(result_message)
-                self._logger.error(traceback.format_exc())
-                result = -1
-            finally:
-                self._strategy_context.clean_up_workspace()
-                self._strategy_context.unset_file_logging()
-        else:
-            self._logger.info(f'No executors for {entry}')
+                        context = {'hierarchy': hierarchy}
+                        for executor in self._executors:
+                            self._logger.info(f'Task with {executor.__class__.__name__} for {hierarchy.obs_id}')
+                            executor.execute(context)
+                    unset_keys.append(hierarchy.file_uri)
+                else:
+                    result = -1
+                    result_message = 'Invalid name format'
+                    unset_keys.append(hierarchy.file_uri)
+            # keep failed hierarchy information for retries
+            self._strategy_context.unset(unset_keys)
+        except Exception as e:
+            result_message = f'{entry} failed execute with {e}'
+            self._logger.warning(result_message)
+            self._logger.error(traceback.format_exc())
             result = -1
-            result_message = 'No executors'
-        self._logger.debug(f'End do_one with result {result}, message {result_message}')
+        finally:
+            self._strategy_context.clean_up_workspace()
+            self._strategy_context.unset_file_logging()
+        self._logger.error(f'End do_one with result {result}, message {result_message}')
         return result, result_message
 
 
@@ -1643,3 +1793,691 @@ class FitsForCADCCompressor(FitsForCADCDecompressor):
                 returned_fqn = super().fix_compression(fqn)
                 # log message in the super
         return returned_fqn
+
+
+# class X:
+#     def __init__(self, clients, config, observable, visitors):
+#         self._clients = clients
+#         self._config = config
+#         self._observable = observable
+#         self._visitors = visitors
+#         self._hierarchy = None
+#         self._logger = logging.getLogger(self.__class__.__name__)
+#         self._logger.setLevel(config.logging_level)
+#         # pass logging information on to visitors with exec statements
+#         formatter = logging.Formatter(
+#             '%(asctime)s:%(levelname)s:%(name)-12s:%(lineno)d:%(message)s'
+#         )
+#         for handler in self._logger.handlers:
+#             handler.setLevel(config.logging_level)
+#             handler.setFormatter(formatter)
+#         (
+#             self.logging_level_param,
+#             self.log_level_as,
+#         ) = self._specify_logging_level_param(config.logging_level)
+
+#     def _cadc_put(self, source_fqn, uri):
+#         interim_fqn = self._decompressor.fix_compression(source_fqn)
+#         self._clients.data_client.put(os.path.dirname(interim_fqn), uri)
+#         # fix FileInfo that becomes out-dated by decompression during a STORE
+#         # task, in this common location, affecting all collections
+#         if source_fqn != interim_fqn:
+#             self._logger.debug(f'Recalculate FileInfo for {interim_fqn}')
+#             self._hierarchy.file_info = get_local_file_info(interim_fqn)
+
+#     def _caom2_read(self):
+#         """Retrieve the existing observation model metadata."""
+#         self._observation = clc.repo_get(
+#             self._clients.metadata_client, self._config.collection, self._hierarchy.obs_id, self._observable.metrics
+#         )
+#         self._caom2_update_needed = False if self._observation is None else True
+#         if self._caom2_update_needed:
+#             self._logger.debug(f'Found observation {self._observation.observation_id}')
+
+#     def _caom2_store(self):
+#         """Update an existing observation instance.  Assumes the obs_id
+#         values are set correctly."""
+#         if self._caom2_update_needed:
+#             clc.repo_update(self._clients.metadata_client, self._observation, self._observable.metrics)
+#         else:
+#             clc.repo_create(self._clients.metadata_client, self._observation, self._observable.metrics)
+
+#     def _read_model(self):
+#         """Read an observation into memory from an XML file on disk."""
+#         self._observation = None
+#         if os.path.exists(self._model_fqn):
+#             self._observation = mc.read_obs_from_file(self._model_fqn)
+#         self._caom2_update_needed = False if self._observation is None else True
+
+#     def _store_data(self):
+#         for index, entry in enumerate(self._hierarchy.source_names):
+#             if self._config.use_local_files:
+#                local_fqn = entry
+#             else:
+#                 temp = urlparse(entry)
+#                 local_fqn = os.path.join(self._hierarchy.working_directory, temp.path.split('/')[-1])
+
+#             self._logger.debug(f'store the input file {local_fqn} to {self._hierarchy.destination_uris[index]}')
+#             self._cadc_put(local_fqn, self._storage_name.destination_uris[index])
+#             # TODO
+#             # self._store_transferrer.post_store_check(entry, self._storage_name.destination_uris[index])
+
+#     def _visit(self):
+#         """Execute the visitors."""
+#         kwargs = {
+#             'clients': self._clients,
+#             'config': self._config,
+#             'observable': self._observable,
+#             'hierarchy': self._hierarchy,
+#         }
+#         for visitor in self._visitors:
+#             try:
+#                 self._logger.debug(f'Visit for {visitor.__class__.__name__}')
+#                 self._observation = visitor.visit(self._observation, **kwargs)
+#             except Exception as e:
+#                 raise mc.CadcException(e)
+
+#     def _write_model(self):
+#         """Write an observation to disk from memory, represented in XML."""
+#         if self._observation is not None:
+#             self._logger.debug(f'Write model to {self._model_fqn}.')
+#             mc.write_obs_to_file(self._observation, self._model_fqn)
+
+#     def execute(self, context):
+#         self._logger.debug('Begin execute')
+#         self._logger.debug('the steps:')
+#         self._hierarchy = context.get('hierarchy')
+#         if self._config.log_to_file:
+#             self._model_fqn = os.path.join(self._config.log_file_directory, f'{self._hierarchy.obs_id}.xml')
+#         else:
+#             self._model_fqn = os.path.join(self._hierarchy.working_directory, f'{self._hierarchy.obs_id}.xml')
+#         self._decompressor = context_decompressor_factory(self._config, self.log_level_as, self._hierarchy)
+
+#     def uses_data(self):
+#         result = False
+#         for visitor in self._visitors:
+#             if visitor.uses_data:
+#                 result = True
+#                 break
+#         return result
+
+#     @staticmethod
+#     def _specify_logging_level_param(logging_level):
+#         """Make a configured logging level into command-line parameters."""
+#         lookup = {
+#             logging.DEBUG: ('--debug', logging.debug),
+#             logging.INFO: ('--verbose', logging.info),
+#             logging.WARNING: ('', logging.warning),
+#             logging.ERROR: ('--quiet', logging.error),
+#         }
+#         return lookup.get(logging_level, ('', logging.info))
+
+
+# class StoreIngestX(X):
+#     def __init__(self, clients, config, observable, visitors):
+#         super().__init__(clients, config, observable, visitors)
+
+#     def execute(self, context):
+#         super().execute(context)
+#         self._logger.debug('store the input files')
+#         self._store_data()
+
+#         self._logger.debug('get the observation for the existing model')
+#         self._caom2_read()
+
+#         self._logger.debug('execute the visitors')
+#         self._visit()
+
+#         self._logger.debug('write the observation to disk for debugging')
+#         self._write_model()
+
+#         self._logger.debug('store the updated xml')
+#         self._caom2_store()
+
+#         self._logger.debug('End execute.')
+
+
+# class StoreX(X):
+#     def __init__(self, clients, config, observable, visitors):
+#         super().__init__(clients, config, observable, visitors)
+
+#     def execute(self, context):
+#         super().execute(context)
+#         self._logger.debug('store the input files')
+#         self._store_data()
+#         self._logger.debug('End execute.')
+
+
+# class IngestX(X):
+#     def __init__(self, clients, config, observable, visitors):
+#         super().__init__(clients, config, observable, visitors)
+
+#     def execute(self, context):
+#         super().execute(context)
+#         self._logger.debug('get the observation for the existing model')
+#         self._caom2_read()
+
+#         self._logger.debug('execute the visitors')
+#         self._visit()
+
+#         self._logger.debug('write the observation to disk for debugging')
+#         self._write_model()
+
+#         self._logger.debug('store the updated xml')
+#         self._caom2_store()
+#         self._logger.debug('End execute.')
+
+
+# class ScrapeX(X):
+#     def __init__(self, clients, config, observable, visitors):
+#         super().__init__(clients, config, observable, visitors)
+
+#     def execute(self, context):
+#         super().execute(context)
+#         self._logger.debug('get the observation for the existing model')
+#         self._read_model()
+
+#         self._logger.debug('execute the visitors')
+#         self._visit()
+
+#         self._logger.debug('write the observation to disk for debugging')
+#         self._write_model()
+
+#         self._logger.debug('End execute.')
+
+
+class CaomExecuteWithVisitors:
+    """Abstract class that defines the operations common to all Execute classes."""
+
+    def __init__(
+            self,
+            clients=None,
+            config=None,
+            metadata_reader=None,
+            observable=None,
+            visitors=None,
+            ):
+        """
+        :param config: Configurable parts of execution, as stored in manage_composable.Config.
+        :param visitors: List of classes with a
+            'visit(observation, **kwargs)' method signature. May require access to data or metadata.
+        :param observable: things that last longer than a pipeline execution
+        :param metadata_reader: instance of MetadataReader, for retrieving metadata.
+        :param clients: instance of ClientCollection, for passing around long-lived https sessions, mostly
+        """
+        self._logger = logging.getLogger(self.__class__.__name__)
+        self._logger.setLevel(config.logging_level)
+        formatter = logging.Formatter(
+            '%(asctime)s:%(levelname)s:%(name)-12s:%(lineno)d:%(message)s'
+        )
+        for handler in self._logger.handlers:
+            handler.setLevel(config.logging_level)
+            handler.setFormatter(formatter)
+        (
+            self.logging_level_param,
+            self.log_level_as,
+        ) = self._specify_logging_level_param(config.logging_level)
+        self.root_dir = config.working_directory
+        self._config = config
+        self._working_dir = None
+        self._model_fqn = None
+        self._storage_name = None
+        self._decompressor = None
+        if clients is not None:
+            self.cadc_client = clients.data_client
+            self.caom_repo_client = clients.metadata_client
+        self._clients = clients
+        self._visitors = visitors
+        self._observable = observable
+        self._log_file_directory = None
+        self._store_transferrer = None
+        self._metadata_reader = metadata_reader
+        self._observation = None
+        # track whether the caom2repo call will be a create or an update
+        self._caom2_update_needed = False
+
+    def __str__(self):
+        return (
+            f'\n'
+            f'        obs_id: {self._storage_name.obs_id}\n'
+            f'     model_fqn: {self._model_fqn}\n'
+            f'   working_dir: {self._working_dir}\n'
+        )
+
+    @property
+    def storage_name(self):
+        return self._storage_name
+
+    @storage_name.setter
+    def storage_name(self, value):
+        logging.error(value)
+        self._storage_name = value
+        self._working_dir = os.path.join(self.root_dir, value.obs_id)
+        if self._config.log_to_file:
+            self._model_fqn = os.path.join(self._config._log_file_directory, f'{value.obs_id}.xml')
+        else:
+            self._model_fqn = os.path.join(self._working_dir, f'{value.obs_id}.xml')
+        self._decompressor = decompressor_factory(
+            self._config, self._working_dir, self.log_level_as, value
+        )
+
+    @property
+    def working_dir(self):
+        return self._working_dir
+
+    def _caom2_read(self):
+        """Retrieve the existing observation model metadata."""
+        self._observation = clc.repo_get(
+            self.caom_repo_client,
+            self._storage_name.collection,
+            self._storage_name.obs_id,
+            self._observable.metrics,
+        )
+        self._caom2_update_needed = False if self._observation is None else True
+        if self._caom2_update_needed:
+            self._logger.debug(f'Found observation {self._observation.observation_id}')
+
+    def _caom2_store(self):
+        """Update an existing observation instance.  Assumes the obs_id
+        values are set correctly."""
+        if self._caom2_update_needed:
+            clc.repo_update(self.caom_repo_client, self._observation, self._observable.metrics)
+        else:
+            clc.repo_create(self.caom_repo_client, self._observation, self._observable.metrics)
+
+    def _caom2_delete_create(self):
+        """Delete an observation instance based on an input parameter."""
+        if self._caom2_update_needed:
+            clc.repo_delete(
+                self.caom_repo_client,
+                self._observation.collection,
+                self._observation.observation_id,
+                self._observable.metrics,
+            )
+        clc.repo_create(self.caom_repo_client, self._observation, self._observable.metrics)
+
+    def _cadc_put(self, source_fqn, uri):
+        interim_fqn = self._decompressor.fix_compression(source_fqn)
+        self.cadc_client.put(os.path.dirname(interim_fqn), uri)
+        # fix FileInfo that becomes out-dated by decompression during a STORE
+        # task, in this common location, affecting all collections
+        if source_fqn != interim_fqn:
+            self._logger.debug(f'Recalculate FileInfo for {interim_fqn}')
+            interim_file_info = get_local_file_info(interim_fqn)
+            self._metadata_reader.file_info[uri] = interim_file_info
+
+    def _read_model(self):
+        """Read an observation into memory from an XML file on disk."""
+        self._observation = None
+        if os.path.exists(self._model_fqn):
+            self._observation = mc.read_obs_from_file(self._model_fqn)
+        self._caom2_update_needed = False if self._observation is None else True
+
+    def _store_data(self):
+        for index, entry in enumerate(self._storage_name.source_names):
+            if self._config.use_local_files:
+               local_fqn = entry
+            else:
+                temp = urlparse(entry)
+                local_fqn = os.path.join(self._working_dir, temp.path.split('/')[-1])
+                self._logger.debug(f'Retrieve {entry} to {local_fqn}')
+                self._store_transferrer.get(entry, local_fqn)
+
+            self._logger.debug(f'store the input file {local_fqn} to {self._storage_name.destination_uris[index]}')
+            self._cadc_put(local_fqn, self._storage_name.destination_uris[index])
+            self._store_transferrer.post_store_check(entry, self._storage_name.destination_uris[index])
+
+    def _visit(self):
+        """Execute the visitors that require access to the full data content of a file."""
+        kwargs = {
+            'working_directory': self._working_dir,
+            'storage_name': self._storage_name,
+            'log_file_directory': self._config._log_file_directory,
+            'clients': self._clients,
+            'observable': self._observable,
+            'metadata_reader': self._metadata_reader,
+            'config': self._config,
+        }
+        for visitor in self._visitors:
+            try:
+                self._logger.debug(f'Visit for {visitor.__class__.__name__}')
+                self._observation = visitor.visit(self._observation, **kwargs)
+            except Exception as e:
+                raise mc.CadcException(e)
+
+    def _write_model(self):
+        """Write an observation to disk from memory, represented in XML."""
+        if self._observation is not None:
+            logging.error(self._model_fqn)
+            self._logger.debug(f'Write model to {self._model_fqn}.')
+            mc.write_obs_to_file(self._observation, self._model_fqn)
+
+    def execute(self, context):
+        self._logger.debug('Begin execute')
+        self._logger.debug('the steps:')
+        self.storage_name = context.get('storage_name')
+        self._metadata_reader.set(self.storage_name)
+
+    @staticmethod
+    def _specify_logging_level_param(logging_level):
+        """Make a configured logging level into command-line parameters."""
+        lookup = {
+            logging.DEBUG: ('--debug', logging.debug),
+            logging.INFO: ('--verbose', logging.info),
+            logging.WARNING: ('', logging.warning),
+            logging.ERROR: ('--quiet', logging.error),
+        }
+        return lookup.get(logging_level, ('', logging.info))
+
+
+class NoFheadStoreWithVisitor(CaomExecuteWithVisitors):
+    """Defines a pipeline step for all the operations that require access to the file on disk for metadata and data
+    operations that includes STORE.
+
+    At the time of writing, there is no --fhead metadata retrieval option for HDF5 files.
+    """
+
+    def __init__(
+        self,
+        clients,
+        config,
+        metadata_reader,
+        observable,
+        store_transferrer,
+        visitors,
+    ):
+        super().__init__(
+            config=config,
+            clients=clients,
+            visitors=visitors,
+            metadata_reader=metadata_reader,
+            observable=observable,
+        )
+        self._store_transferrer = store_transferrer
+
+    def execute(self, context):
+        self._logger.debug('Begin execute with the steps:')
+        self.storage_name = context.get('storage_name')
+
+        self._logger.debug('store the input files')
+        self._store_data()
+
+        self._logger.debug('initialize the metadata')
+        self._metadata_reader.working_directory = self._working_dir
+        self._metadata_reader.set(self._storage_name)
+
+        self._logger.debug('get the observation for the existing model')
+        self._caom2_read()
+
+        self._logger.debug('execute the visitors')
+        self._visit()
+
+        self._logger.debug('write the observation to disk for debugging')
+        self._write_model()
+
+        self._logger.debug('store the updated xml')
+        self._caom2_store()
+
+        self._logger.debug('End execute.')
+
+
+class NoFheadVisitWithVisitors(CaomExecuteWithVisitors):
+    """Defines a pipeline step for all the operations that require access to the file on disk for metdata and data
+    operations. This is to support HDF5 operations, since at the time of writing, there is no --fhead metadata
+    retrieval option for HDF5 files.
+
+    """
+
+    def __init__(
+        self,
+        clients,
+        config,
+        metadata_reader,
+        observable,
+        transferrer,
+        visitors,
+    ):
+        super().__init__(
+            clients=clients,
+            config=config,
+            metadata_reader=metadata_reader,
+            observable=observable,
+            visitors=visitors,
+        )
+        self._modify_transferrer = transferrer
+
+    def execute(self, context):
+        self._logger.debug('Begin execute with the steps:')
+        self.storage_name = context.get('storage_name')
+
+        self._logger.debug('get the input files')
+        for entry in self._storage_name.destination_uris:
+            local_fqn = os.path.join(self._working_dir, os.path.basename(entry))
+            self._modify_transferrer.get(entry, local_fqn)
+
+        self._logger.debug('initialize the metadata')
+        self._metadata_reader.working_directory = self._working_dir
+        self._metadata_reader.set(self._storage_name)
+
+        self._logger.debug('get the observation for the existing model')
+        self._caom2_read()
+
+        self._logger.debug('execute the visitors')
+        self._visit()
+
+        self._logger.debug('write the observation to disk for debugging')
+        self._write_model()
+
+        self._logger.debug('store the updated xml')
+        self._caom2_store()
+
+        self._logger.debug('End execute.')
+
+
+class ScrapeWithVisitors(CaomExecuteWithVisitors):
+    """Defines the pipeline step for Collection creation of a CAOM model
+    observation. The file containing the metadata is located on disk.
+    No record is written to a web service."""
+
+    def __init__(self, config, metadata_reader,  visitors):
+        super().__init__(
+            clients=None,
+            config=config,
+            metadata_reader=metadata_reader,
+            visitors=visitors,
+        )
+
+    def execute(self, context):
+        super().execute(context)
+
+        self._logger.debug('get observation for the existing model from disk')
+        self._read_model()
+
+        self._logger.debug('the visitors')
+        self._visit()
+
+        self._logger.debug('write the updated xml to disk for debugging')
+        self._write_model()
+
+        self._logger.debug(f'End execute')
+
+
+class StoreWithVisitors(CaomExecuteWithVisitors):
+    """Defines the pipeline step for Collection storage of a file. This
+    requires access to the file on disk.
+
+    Need the metadata_reader instance in case decompression occurs, resulting
+    in a change to the FileInfo.
+    """
+
+    def __init__(
+        self,
+        clients,
+        config,
+        metadata_reader,
+        observable,
+        transferrer,
+    ):
+        super().__init__(
+            clients=clients,
+            config=config,
+            metadata_reader=metadata_reader,
+            observable=observable,
+            visitors=None,
+        )
+        self._store_transferrer = transferrer
+
+    def execute(self, context):
+        super().execute(context)
+
+        self._logger.debug(
+            f'Store {len(self._storage_name.source_names)} files to CADC.'
+        )
+        self._store_data()
+        self._logger.debug('End execute')
+
+
+class NoFheadVisitWithVisitorsAndContext(CaomExecuteWithVisitors):
+    """Defines a pipeline step for all the operations that require access to the file on disk for metdata and data
+    operations. This is to support HDF5 operations, since at the time of writing, there is no --fhead metadata
+    retrieval option for HDF5 files.
+
+    """
+
+    def __init__(
+        self,
+        clients,
+        config,
+        observable,
+        transferrer,
+        visitors,
+    ):
+        super().__init__(
+            clients=clients,
+            config=config,
+            metadata_reader=None,
+            observable=observable,
+            visitors=visitors,
+        )
+        self._modify_transferrer = transferrer
+
+    def execute(self, context):
+        self._logger.debug('Begin execute with the steps:')
+        self.storage_name = context.get('storage_name')
+
+        self._logger.debug('get the input files')
+        for entry in self._storage_name.destination_uris:
+            local_fqn = os.path.join(self._working_dir, os.path.basename(entry))
+            self._modify_transferrer.get(entry, local_fqn)
+
+        self._logger.debug('get the observation for the existing model')
+        self._caom2_read()
+
+        self._logger.debug('execute the visitors')
+        self._visit()
+
+        self._logger.debug('write the observation to disk for debugging')
+        self._write_model()
+
+        self._logger.debug('store the updated xml')
+        self._caom2_store()
+
+        self._logger.debug('End execute.')
+
+
+class ScrapeWithVisitorsAndContext(CaomExecuteWithVisitors):
+    """Defines the pipeline step for Collection creation of a CAOM model
+    observation. The file containing the metadata is located on disk.
+    No record is written to a web service."""
+
+    def __init__(self, config,  visitors):
+        super().__init__(
+            clients=None,
+            config=config,
+            metadata_reader=None,
+            visitors=visitors,
+        )
+
+    def execute(self, context):
+        super().execute(context)
+
+        self._logger.debug('get observation for the existing model from disk')
+        self._read_model()
+
+        self._logger.debug('the visitors')
+        self._visit()
+
+        self._logger.debug('write the updated xml to disk for debugging')
+        self._write_model()
+
+        self._logger.debug(f'End execute')
+
+
+# class Visitor:
+
+#     def __init__(self, uses_data):
+#         self._uses_data = uses_data
+
+#     @property
+#     def uses_data(self):
+#         return self._uses_data
+
+#     def visit(self, observation, **kwargs):
+#         # the interface that existed before I got here
+#         raise NotImplementedError
+
+
+def executor_factory(clients, config, metadata_reader, modify_transferrer, observable, store_transferrer, visitors):
+    uses_data = False
+    executor = None
+    for visitor in visitors:
+        if visitor.uses_data:
+            uses_data = True
+            break
+    if uses_data:
+        if mc.TaskType.STORE in config.task_types and mc.TaskType.INGEST in config.task_types:
+            executor = NoFheadStoreWithVisitor(clients, config, observable, visitors)
+        elif mc.TaskType.STORE in config.task_types:
+            executor = StoreWithVisitors(clients, config, observable, visitors)
+        elif mc.TaskType.INGEST in config.task_types or mc.TaskType.MODIFY in config.task_types:
+            executor = NoFheadVisitWithVisitors(clients, config, observable, visitors)
+        elif mc.TaskType.SCRAPE in config.task_types or mc.TaskType.MODIFY in config.task_types:
+            executor = ScrapeWithVisitors(clients, config, observable, visitors)
+    else:
+        if mc.TaskType.INGEST in config.task_types or mc.TaskType.VISIT in config.task_types:
+            executor = NoFheadVisitWithVisitors(
+                clients, config, metadata_reader, observable, modify_transferrer, visitors
+            )
+        elif mc.TaskType.SCRAPE in config.task_types:
+            executor = ScrapeWithVisitors(config, metadata_reader, visitors)
+
+    return executor
+
+
+def executor_factory_with_context(clients, config, modify_transferrer, observable, visitors):
+    uses_data = False
+    executor = None
+    for visitor in visitors:
+        if visitor.uses_data:
+            uses_data = True
+            logging.info(f'uses_data is True')
+            break
+    if uses_data:
+        if mc.TaskType.STORE in config.task_types and mc.TaskType.INGEST in config.task_types:
+            executor = NoFheadStoreWithVisitor(clients, config, observable, visitors)
+        elif mc.TaskType.STORE in config.task_types:
+            executor = StoreWithVisitors(clients, config, observable, visitors)
+        elif mc.TaskType.INGEST in config.task_types or mc.TaskType.MODIFY in config.task_types:
+            executor = NoFheadVisitWithVisitors(clients, config, observable, visitors)
+        elif mc.TaskType.SCRAPE in config.task_types or mc.TaskType.MODIFY in config.task_types:
+            executor = ScrapeWithVisitors(clients, config, observable, visitors)
+    else:
+        if mc.TaskType.INGEST in config.task_types or mc.TaskType.VISIT in config.task_types:
+            executor = NoFheadVisitWithVisitorsAndContext(
+                clients, config, observable, modify_transferrer, visitors
+            )
+        elif mc.TaskType.SCRAPE in config.task_types:
+            executor = ScrapeWithVisitorsAndContext(config, visitors)
+
+    logging.debug(f'Created {executor.__class__.__name__}')
+    return executor
