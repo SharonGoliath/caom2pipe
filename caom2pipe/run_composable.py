@@ -81,7 +81,7 @@ import os
 import traceback
 
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from importlib import import_module
 from time import sleep
 
@@ -154,35 +154,23 @@ class TodoRunner:
         self._logger.debug(f'Begin _process_entry for {entry}.')
         storage_name = None
         try:
+            start_s = datetime.now(tz=timezone.utc).timestamp()
             storage_name = self._builder.build(entry)
-            if storage_name.is_valid():
-                result = self._organizer.do_one(storage_name)
-            else:
-                self._logger.error(
-                    f'{storage_name.obs_id} failed naming validation check.'
-                )
-                self._reporter.capture_failure(
-                    storage_name, BaseException('Invalid name format'), 'Invalid name format.'
-                )
-                result = -1
+            result, result_message = self._organizer.do_one(storage_name)
+            if result == 0 and result_message is None:
+                self._reporter.capture_success(storage_name.obs_id, storage_name.file_name, start_s)
+            elif result == -1 and not result_message.startswith('No executors'):
+                self._reporter.capture_failure(storage_name, BaseException(result_message), result_message)
         except Exception as e:
             if storage_name is None:
                 # keep going through storage name build failures
                 self._logger.debug(traceback.format_exc())
-                self._logger.warning(
-                    f'StorageName construction failed. Using a default '
-                    f'instance for {entry}, for logging only.'
-                )
-                storage_name = mc.StorageName(
-                    obs_id=entry, source_names=[entry]
-                )
+                self._logger.warning(f'StorageName construction failed. Using a default instance for {entry}, for logging only.')
+                storage_name = mc.StorageName(obs_id=entry, source_names=[entry])
             self._reporter.capture_failure(storage_name, e, traceback.format_exc())
-            self._logger.info(
-                f'Execution failed for {storage_name.file_name} with {e}'
-            )
+            self._logger.info(f'Execution failed for {storage_name.file_name} with {e}')
             self._logger.debug(traceback.format_exc())
-            # keep processing the rest of the entries, so don't throw
-            # this or any other exception at this point
+            # keep processing the rest of the entries, so don't throw this or any other exception at this point
             result = -1
         try:
             data_source.clean_up(entry, result, current_count)
@@ -228,8 +216,6 @@ class TodoRunner:
         result = 0
         for data_source in self._data_sources:
             self._build_todo_list(data_source)
-            # have the choose call here, so that retries don't change the set of tasks to be executed
-            self._organizer.choose()
             result |= self._run_todo_list(data_source, current_count=0)
         self._logger.debug('End run.')
         return result
@@ -239,9 +225,7 @@ class TodoRunner:
         result = 0
         if self._config.need_to_retry():
             for count in range(0, self._config.retry_count):
-                self._logger.warning(
-                    f'Beginning retry {count + 1} in {os.getcwd()} for data source {0}'
-                )
+                self._logger.warning(f'Beginning retry {count + 1} in {os.getcwd()} for data source {0}')
                 # to preserve the clean_up behaviour from one of the original data sources
                 self._reset_for_retry(self._data_sources[0], count)
                 # make another file list
@@ -295,7 +279,6 @@ class StateRunner(TodoRunner):
         self._reset_retries()
 
         result = 0
-        self._organizer.choose()
         for data_source in self._data_sources:
             result |= self._process_data_source(data_source)
 
@@ -505,7 +488,6 @@ def common_runner_init(
         metadata_reader,
         clients,
         observable,
-        reporter,
     )
 
     return (
@@ -725,7 +707,6 @@ def run_single(
         metadata_reader,
         clients,
         observable,
-        reporter,
     )
     organizer.choose()
     result = organizer.do_one(storage_name)

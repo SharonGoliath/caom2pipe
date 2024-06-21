@@ -405,7 +405,6 @@ def test_organize_executes_chooser(test_config, tmpdir):
         clients=Mock(autospec=True, return_value=None),
         metadata_reader=Mock(autospec=True),
     )
-    test_oe.choose()
     assert test_oe._executors is not None
     assert len(test_oe._executors) == 1
     assert isinstance(test_oe._executors[0], ec.MetaVisitDeleteCreate)
@@ -421,7 +420,6 @@ def test_organize_executes_chooser(test_config, tmpdir):
         clients=Mock(autospec=True, return_value=None),
         metadata_reader=Mock(autospec=True),
     )
-    test_oe.choose()
     assert test_oe._executors is not None
     assert len(test_oe._executors) == 1
     assert isinstance(test_oe._executors[0], ec.MetaVisitDeleteCreate)
@@ -438,7 +436,6 @@ def test_organize_executes_client_existing(test_config):
         metadata_reader=Mock(autospec=True),
         clients=Mock(autospec=True),
     )
-    test_oe.choose()
     assert test_oe._executors is not None
     assert len(test_oe._executors) == 1
     assert isinstance(test_oe._executors[0], ec.MetaVisit)
@@ -456,7 +453,6 @@ def test_organize_executes_client_visit(test_config):
         metadata_reader=Mock(autospec=True),
         clients=clients_mock,
     )
-    test_oe.choose()
     assert test_oe._executors is not None
     assert len(test_oe._executors) == 1
     assert isinstance(test_oe._executors[0], ec.MetaVisit)
@@ -533,7 +529,6 @@ def test_organize_executes_client_do_one(test_config):
         clients=Mock(autospec=True),
         metadata_reader=Mock(autospec=True),
     )
-    test_oe.choose()
     assert test_oe._executors is not None
     assert len(test_oe._executors) == 1
     assert isinstance(test_oe._executors[0], ec.Scrape), f'{type(test_oe._executors[0])}'
@@ -551,7 +546,6 @@ def test_organize_executes_client_do_one(test_config):
         clients=Mock(autospec=True),
         metadata_reader=Mock(autospec=True),
     )
-    test_oe.choose()
     assert test_oe._executors is not None
     assert len(test_oe._executors) == 1
     assert isinstance(test_oe._executors[0], ec.NoFheadStoreVisit), type(test_oe._executors[0])
@@ -566,7 +560,6 @@ def test_organize_executes_client_do_one(test_config):
         clients=Mock(autospec=True),
         metadata_reader=Mock(autospec=True),
     )
-    test_oe.choose()
     assert test_oe._executors is not None
     assert len(test_oe._executors) == 1
     assert isinstance(test_oe._executors[0], ec.NoFheadVisit)
@@ -581,7 +574,6 @@ def test_organize_executes_client_do_one(test_config):
         clients=Mock(autospec=True),
         metadata_reader=Mock(autospec=True),
     )
-    test_oe.choose()
     assert test_oe._executors is not None
     assert len(test_oe._executors) == 1
     assert isinstance(test_oe._executors[0], ec.NoFheadVisit)
@@ -596,7 +588,6 @@ def test_organize_executes_client_do_one(test_config):
         clients=Mock(autospec=True),
         metadata_reader=Mock(autospec=True),
     )
-    test_oe.choose()
     assert test_oe._executors is not None
     assert len(test_oe._executors) == 1
     assert isinstance(test_oe._executors[0], ec.NoFheadScrape), f'{type(test_oe._executors[0])}'
@@ -612,7 +603,6 @@ def test_organize_executes_client_do_one(test_config):
         clients=Mock(autospec=True),
         metadata_reader=Mock(autospec=True),
     )
-    test_oe.choose()
     assert test_oe._executors is not None
     assert len(test_oe._executors) == 1
     assert isinstance(test_oe._executors[0], ec.MetaVisitDeleteCreate)
@@ -902,7 +892,7 @@ def test_decompress():
     test_files = [
         '/tmp/abc.tar.gz',
         '/tmp/def.csv',
-        '/test_files/compression/abc.fits.gz',
+        '/test_files/compression/C170324_0054_SCI.fits.gz',
         # '/test_files/compression/ghi.fits.bz2',
     ]
 
@@ -946,27 +936,15 @@ class VisitWithTimeoutException:
 class TestDoOne:
 
     def _ini(self, test_config, tmp_path):
-        test_config.task_types = [mc.TaskType.INGEST]
+
         test_config.change_working_directory(tmp_path)
         self._reader = Mock()
         self._observer = mc.Observable(test_config)
-        self._reporter = mc.ExecutionReporter(test_config, self._observer)
         self._clients = Mock()
         self._storage_name = tc.TStorageName()
 
-    def _check_logs(self, failure_should_exist, retry_should_exist, success_should_exist):
-        failure_files = self._reporter.get_file_names_from_log_file(self._reporter._failure_fqn)
-        retry_files = self._reporter.get_file_names_from_log_file(self._reporter._retry_fqn)
-        success_files = self._reporter.get_file_names_from_log_file(self._reporter._success_fqn)
-        assert (
-            (self._storage_name.file_name in failure_files) == failure_should_exist
-        ), f'failure {failure_should_exist}'
-        assert (self._storage_name.source_names[0] in retry_files) == retry_should_exist, f'retry {retry_should_exist}'
-        assert (
-            (self._storage_name.file_name in success_files) == success_should_exist
-        ), f'success {success_should_exist}'
-
     def test_do_one_execute_success(self, test_config, tmp_path):
+        test_config.task_types = [mc.TaskType.INGEST]
         self._ini(test_config, tmp_path)
         # check that failure/retry files have the correct content if do_one succeeds
         test_meta = [VisitNoException()]
@@ -977,15 +955,13 @@ class TestDoOne:
             metadata_reader=self._reader,
             observable=self._observer,
             clients=self._clients,
-            reporter=self._reporter,
         )
-        test_subject.choose()
         test_result = test_subject.do_one(self._storage_name)
         assert test_result is not None, 'expect a result'
-        assert test_result == 0, 'expect success'
-        self._check_logs(failure_should_exist=False, retry_should_exist=False, success_should_exist=True)
+        assert test_result == (0, None), 'expect success'
 
     def test_do_one_execute_raises_exception(self, test_config, tmp_path):
+        test_config.task_types = [mc.TaskType.INGEST]
         self._ini(test_config, tmp_path)
         # check that failure/retry files have the correct content if is_rejected returns False, the
         # number of executors > 0, execute raises an exception without timeout in the message text
@@ -997,15 +973,15 @@ class TestDoOne:
             metadata_reader=self._reader,
             observable=self._observer,
             clients=self._clients,
-            reporter=self._reporter,
         )
-        test_subject.choose()
         test_result = test_subject.do_one(self._storage_name)
         assert test_result is not None, 'expect a result'
-        assert test_result == -1, 'expect failure for the general exception case'
-        self._check_logs(failure_should_exist=True, retry_should_exist=False, success_should_exist=False)
+        assert (
+            test_result == (-1, 'Execution failed for test_obs_id with Cannot build an observation')
+        ), 'expect failure for the general exception case'
 
     def test_do_one_is_rejected_true(self, test_config, tmp_path):
+        test_config.task_types = [mc.TaskType.INGEST]
         self._ini(test_config, tmp_path)
         # check that failure/retry files have the correct content if is_rejected returns True
         test_meta = [VisitNoException()]
@@ -1016,32 +992,23 @@ class TestDoOne:
             [],
             metadata_reader=self._reader,
             observable=self._observer,
-            reporter=self._reporter,
         )
         test_result = test_subject.do_one(self._storage_name)
         assert test_result is not None, 'expect a result'
-        assert test_result == 0, 'expect success for the bad metadata case'
-        self._check_logs(failure_should_exist=True, retry_should_exist=False, success_should_exist=False)
+        assert test_result == (0, 'Rejected'), 'expect success for the bad metadata case'
 
     def test_do_one_is_rejected_false_executors_len_zero(self, test_config, tmp_path):
         self._ini(test_config, tmp_path)
         # check that failure/retry files have the correct content if is_rejected returns False, but the
         # number of executors == 0
-        test_subject = ec.OrganizeExecutes(
-            test_config,
-            [],
-            [],
-            metadata_reader=self._reader,
-            observable=self._observer,
-            reporter=self._reporter,
-        )
-        test_result = test_subject.do_one(self._storage_name)
-        assert test_result is not None, 'expect a result'
-        assert test_result == -1, 'expect failure for the len(executors) == 0 case'
-        # no logging for this test case at the moment
-        self._check_logs(failure_should_exist=False, retry_should_exist=False, success_should_exist=False)
+        try:
+            _ = ec.OrganizeExecutes(test_config, [], [], metadata_reader=self._reader, observable=self._observer)
+        except mc.CadcException as e:
+            return
+        assert False, 'expect exception'
 
     def test_do_one_execute_raises_timeout_exception(self, test_config, tmp_path):
+        test_config.task_types = [mc.TaskType.INGEST]
         self._ini(test_config, tmp_path)
         # check that failure/retry files have the correct content if is_rejected returns False, the
         # number of executors > 0, execute raises an exception with timeout in the message text
@@ -1053,13 +1020,12 @@ class TestDoOne:
             metadata_reader=self._reader,
             observable=self._observer,
             clients=self._clients,
-            reporter=self._reporter,
         )
-        test_subject.choose()
         test_result = test_subject.do_one(self._storage_name)
         assert test_result is not None, 'expect a result'
-        assert test_result == -1, 'expect failure for the timeout exception case'
-        self._check_logs(failure_should_exist=True, retry_should_exist=True, success_should_exist=False)
+        assert (
+            test_result == (-1, 'Execution failed for test_obs_id with Read timed out')
+        ), 'expect failure for the timeout exception case'
 
 
 class TestFhead:
