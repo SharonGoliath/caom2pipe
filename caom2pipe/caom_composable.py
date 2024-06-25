@@ -1204,10 +1204,10 @@ class TelescopeMapping2:
     map for a file, and then doing any n:n (FITS keywords:CAOM2 keywords)
     mapping, using the 'update' method.
     """
-    def __init__(self, strategy, clients, observable=None, observation=None, config=None):
-        self._strategy = strategy
+    def __init__(self, clients, config=None, hierarchy=None, observable=None, observation=None):
+        self._hierarchy = hierarchy
         self._meta_producer = observable.meta_producer if observable is not None else None
-        self._headers = strategy.metadata
+        self._headers = hierarchy.metadata
         self._clients = clients
         self._observable = observable
         self._observation = observation
@@ -1228,7 +1228,7 @@ class TelescopeMapping2:
         """
         Configure the telescope-specific ObsBlueprint at the CAOM model Observation level.
         """
-        self._logger.debug(f'Begin accumulate_blueprint for {self._strategy.file_uri}')
+        self._logger.debug(f'Begin accumulate_blueprint for {self._hierarchy.file_uri}')
         bp.set('Observation.metaProducer', self._meta_producer)
         bp.set('Plane.metaProducer', self._meta_producer)
         bp.set('Artifact.metaProducer', self._meta_producer)
@@ -1244,20 +1244,20 @@ class TelescopeMapping2:
         self._logger.debug(f'Begin update for {self._observation.observation_id}')
         self._update_groups(self._observation.meta_read_groups, self._meta_read_groups)
         for plane in self._observation.planes.values():
-            if plane.product_id != self._strategy.product_id:
+            if plane.product_id != self._hierarchy.product_id:
                 self._logger.debug(
-                    f'Product ID is {plane.product_id} but working on {self._strategy.product_id}. Continuing.'
+                    f'Product ID is {plane.product_id} but working on {self._hierarchy.product_id}. Continuing.'
                 )
                 continue
             self._update_plane(plane)
             for artifact in plane.artifacts.values():
-                if artifact.uri != self._strategy.file_uri:
+                if artifact.uri != self._hierarchy.file_uri:
                     self._logger.debug(
-                        f'Artifact uri is {artifact.uri} but working on {self._strategy.file_uri}. Continuing.'
+                        f'Artifact uri is {artifact.uri} but working on {self._hierarchy.file_uri}. Continuing.'
                     )
                     continue
-                if self._strategy.file_info:
-                    update_artifact_meta(artifact, self._strategy.file_info)
+                if self._hierarchy.file_info:
+                    update_artifact_meta(artifact, self._hierarchy.file_info)
                 self._update_artifact(artifact)
 
         if isinstance(self._observation, DerivedObservation):
@@ -1402,45 +1402,45 @@ class Fits2caom2Visitor2(mc.Visitor):
     def _get_blueprint(self, instantiated_class):
         return ObsBlueprint(instantiated_class=instantiated_class)
 
-    def _get_parser(self, headers, blueprint, uri):
-        if headers is None or len(headers) == 0:
+    def _get_parser(self, blueprint, hierarchy, uri):
+        if hierarchy.metadata is None or len(hierarchy.metadata) == 0:
             self._logger.debug(f'No headers, using a BlueprintParser for {uri}')
             parser = BlueprintParser(blueprint, uri)
         else:
             self._logger.debug(f'Using a FitsParser for {uri}')
-            parser = FitsParser(headers, blueprint, uri)
+            parser = FitsParser(hierarchy.metadata, blueprint, uri)
         self._logger.debug(f'Created {parser.__class__.__name__} parser for {uri}.')
         return parser
 
-    def _get_mapping(self, clients, config, observable, observation, strategy, dest_uri):
-        return TelescopeMapping2(strategy, clients, observable, observation, config)
+    def _get_mapping(self, clients, config, dest_uri, hierarchy, observable, observation):
+        return TelescopeMapping2(clients, config, hierarchy, observable, observation)
 
     def visit(self, observation, **kwargs):
-        strategy = kwargs.get('strategy')
+        hierarchy = kwargs.get('hierarchy')
         clients = kwargs.get('clients')
         observable = kwargs.get('observable')
         config = kwargs.get('config')
         self._logger.debug('Begin visit')
         try:
-            for uri in strategy.destination_uris:
-                self._logger.debug(f'Build observation for {uri}')
-                telescope_data = self._get_mapping(clients, config, observable, observation, strategy, uri)
+            for dest_uri in hierarchy.destination_uris:
+                self._logger.debug(f'Build observation for {dest_uri}')
+                telescope_data = self._get_mapping(clients, config, dest_uri, hierarchy, observable, observation)
                 if telescope_data is None:
-                    self._logger.info(f'Ignoring {uri} because there is no TelescopeMapping.')
+                    self._logger.info(f'Ignoring {dest_uri} because there is no TelescopeMapping.')
                     continue
                 blueprint = self._get_blueprint(telescope_data)
                 telescope_data.accumulate_blueprint(blueprint)
                 if config.dump_blueprint and config.log_to_file:
-                    with open(f'{config.log_file_directory}/{os.path.basename(uri)}.bp', 'w') as f:
+                    with open(f'{config.log_file_directory}/{os.path.basename(dest_uri)}.bp', 'w') as f:
                         f.write(blueprint.__str__())
-                parser = self._get_parser(strategy.metadata, blueprint, uri)
+                parser = self._get_parser(blueprint, hierarchy, dest_uri)
 
-                if self._observation is None:
+                if observation is None:
                     if blueprint._get('DerivedObservation.members') is None:
                         self._logger.debug('Build a SimpleObservation')
-                        self._observation = SimpleObservation(
-                            collection=strategy.collection,
-                            observation_id=strategy.obs_id,
+                        observation = SimpleObservation(
+                            collection=hierarchy.collection,
+                            observation_id=hierarchy.obs_id,
                             algorithm=Algorithm('exposure'),
                         )
                     else:
@@ -1450,22 +1450,22 @@ class Fits2caom2Visitor2(mc.Visitor):
                             if blueprint._get('Observation.algorithm.name') == 'exposure'
                             else blueprint._get('Observation.algorithm.name')
                         )
-                        self._observation = DerivedObservation(
-                            collection=strategy.collection,
-                            observation_id=strategy.obs_id,
+                        observation = DerivedObservation(
+                            collection=hierarchy.collection,
+                            observation_id=hierarchy.obs_id,
                             algorithm=Algorithm(algorithm_name),
                         )
                     telescope_data.observation = observation
                 parser.augment_observation(
                     observation=observation,
-                    artifact_uri=uri,
-                    product_id=strategy.product_id,
+                    artifact_uri=dest_uri,
+                    product_id=hierarchy.product_id,
                 )
 
                 observation = telescope_data.update()
         except Caom2Exception as e:
             self._logger.debug(traceback.format_exc())
-            self._logger.warning(f'CAOM2 record creation failed for {strategy.obs_id}:{strategy.file_name} with {e}')
+            self._logger.warning(f'CAOM2 record creation failed for {hierarchy.obs_id}:{hierarchy.file_name} with {e}')
             observation = None
 
         self._logger.debug('End visit')

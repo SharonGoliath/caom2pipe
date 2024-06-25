@@ -115,6 +115,7 @@ import logging
 import os
 import traceback
 
+from datetime import datetime, timezone
 from shutil import copyfileobj
 from urllib.parse import urlparse
 
@@ -355,7 +356,7 @@ class CaomExecute:
 
 
 class CaomExecuteContext(CaomExecute):
-    def __init__(self, config, meta_visitors, data_visitors, clients, observable):
+    def __init__(self, clients, config, observable, visitors):
         """
         :param config: Configurable parts of execution, as stored in manage_composable.Config.
         :param meta_visitors: List of classes with a 'visit(observation, **kwargs)' method signature. Requires access
@@ -377,8 +378,7 @@ class CaomExecuteContext(CaomExecute):
         ) = self._specify_logging_level_param(config.logging_level)
         self._model_fqn = None
         self._decompressor = None
-        self._data_visitors = data_visitors
-        self._meta_visitors = meta_visitors
+        self._visitors = visitors
         self._observation = None
         self._config = config
         self._clients = clients
@@ -404,37 +404,21 @@ class CaomExecuteContext(CaomExecute):
         else:
             clc.repo_create(self._clients.metadata_client, self._observation, self._observable.metrics)
 
-    def _visit_data(self):
-        """Execute the visitors that require access to the full data content of a file."""
-        kwargs = {
-            'clients': self._clients,
-            'config': self._config,
-            'observable': self._observable,
-            'strategy': self._strategy,
-        }
-        for visitor in self._data_visitors:
-            try:
-                self._logger.debug(f'Visit for {visitor.__class__.__name__}')
-                self._observation = visitor.visit(self._observation, **kwargs)
-            except Exception as e:
-                raise mc.CadcException(e)
-
-    def _visit_meta(self):
-        """Execute metadata-only visitors on an Observation in
-        memory."""
-        if self._meta_visitors:
+    def _visit(self):
+        """Execute \visitors on an Observation in memory."""
+        if self._visitors:
             kwargs = {
                 'config': self._config,
                 'clients': self._clients,
                 'observable': self._observable,
                 'strategy': self._strategy,
             }
-            for visitor in self._meta_visitors:
+            for visitor in self._visitors:
                 try:
                     self._observation = visitor.visit(self._observation, **kwargs)
                     if self._observation is None:
                         msg = f'No Observation for {self._strategy.file_uri}. Construction failed.'
-                        self._logger.error(f'Stopping _visit_meta with {msg}')
+                        self._logger.error(f'Stopping _visit with {msg}')
                         raise mc.CadcException(msg)
                 except Exception as e:
                     raise mc.CadcException(e)
@@ -987,8 +971,8 @@ class ScrapeContext(CaomExecuteContext):
     observation. The file containing the metadata is located on disk.
     No record is written to a web service."""
 
-    def __init__(self, config, meta_visitors, observable):
-        super().__init__(config, meta_visitors=meta_visitors, clients=None, observable=observable)
+    def __init__(self, config, observable):
+        super().__init__(clients=None, config=config, observable=observable, visitors=None)
 
     def execute(self, context):
         super().execute(context)
@@ -1519,7 +1503,7 @@ class OrganizeExecutesWithVisitors:
             )
         )
 
-    def choose(self):
+    def _choose(self):
         """The logic that decides which descendants of CaomExecute to
         instantiate. This is based on the content of the config.yml file
         for an application.
@@ -1581,6 +1565,7 @@ class OrganizeExecutesWithVisitors:
 class OrganizeWithContext(OrganizeExecutes):
 
     def __init__(self, clients, config, observable, strategy_context, visitors):
+        self._visitors = visitors
         super().__init__(
             config,
             meta_visitors=None,
@@ -1591,11 +1576,10 @@ class OrganizeWithContext(OrganizeExecutes):
             metadata_reader=None,
             clients=clients,
             observable=observable,
-            reporter=observable.reporter,
         )
-        self._executor = None
+        # self._executor = None
         self._strategy_context = strategy_context
-        self._choose(visitors)
+        # self._choose(visitors)
 
     def _clean_up_workspace(self, key):
         raise NotImplementedError
@@ -1606,17 +1590,16 @@ class OrganizeWithContext(OrganizeExecutes):
     def _set_up_file_logging(self, key):
         raise NotImplementedError
 
-    def _choose(self, visitors):
+    def _choose(self):
         """The logic that decides which descendants of CaomExecute to instantiate. This is based on the content of
         the config.yml file for an application.
         """
-        self._executor = executor_factory_with_context(
-            self._clients, self._config, self._modify_transfer, self._observable, visitors
+        executor = executor_factory_with_context(
+            self._clients, self._config, self._modify_transfer, self._observable, self._visitors
         )
-        if self._executor is None:
-            raise mc.CadcException('Found no executor. Stopping execution, since nothing will happen.')
+        self._executors = [executor]
 
-    def do(self, entry):
+    def do_one(self, entry):
         """Process one entry.
         :param entry a string that can be used at a DataSource to identify work to be done
         """
@@ -2333,7 +2316,186 @@ class StoreWithVisitors(CaomExecuteWithVisitors):
         self._logger.debug('End execute')
 
 
-class NoFheadVisitWithVisitorsAndContext(CaomExecuteWithVisitors):
+class CaomExecuteWithVisitorsAndContext:
+    """Abstract class that defines the operations common to all Execute classes."""
+
+    def __init__(
+            self,
+            clients=None,
+            config=None,
+            observable=None,
+            visitors=None,
+            ):
+        """
+        :param config: Configurable parts of execution, as stored in manage_composable.Config.
+        :param visitors: List of classes with a
+            'visit(observation, **kwargs)' method signature. May require access to data or metadata.
+        :param observable: things that last longer than a pipeline execution
+        :param metadata_reader: instance of MetadataReader, for retrieving metadata.
+        :param clients: instance of ClientCollection, for passing around long-lived https sessions, mostly
+        """
+        self._logger = logging.getLogger(self.__class__.__name__)
+        self._logger.setLevel(config.logging_level)
+        formatter = logging.Formatter(
+            '%(asctime)s:%(levelname)s:%(name)-12s:%(lineno)d:%(message)s'
+        )
+        for handler in self._logger.handlers:
+            handler.setLevel(config.logging_level)
+            handler.setFormatter(formatter)
+        (
+            self.logging_level_param,
+            self.log_level_as,
+        ) = self._specify_logging_level_param(config.logging_level)
+        self.root_dir = config.working_directory
+        self._config = config
+        self._hierarchy = None
+        # self._working_dir = None
+        self._model_fqn = None
+        self._decompressor = None
+        self._clients = clients
+        self._visitors = visitors
+        self._observable = observable
+        self._log_file_directory = None
+        self._store_transferrer = None
+        self._observation = None
+        # track whether the caom2repo call will be a create or an update
+        self._caom2_update_needed = False
+
+    def __str__(self):
+        return (
+            f'\n'
+            f'        obs_id: {self._hierarchy.obs_id}\n'
+            f'     model_fqn: {self._model_fqn}\n'
+            f'   working_dir: {self._hierarchy.working_directory}\n'
+        )
+
+    @property
+    def hierarchy(self):
+        return self._hierarchy
+
+    # @hierarchy.setter
+    # def hierarchy(self, value):
+    #     logging.error(value)
+    #     self._hierarchy = value
+    #     self._working_dir = os.path.join(self.root_dir, value.obs_id)
+        # if self._config.log_to_file:
+        #     self._model_fqn = os.path.join(self._config._log_file_directory, f'{value.obs_id}.xml')
+        # else:
+        #     self._model_fqn = os.path.join(value.working_directory, f'{value.obs_id}.xml')
+        # self._decompressor = decompressor_factory(self._config, value.working_directory, self.log_level_as, value)
+
+    # @property
+    # def working_dir(self):
+    #     return self._working_dir
+
+    def _caom2_read(self, hierarchy):
+        """Retrieve the existing observation model metadata."""
+        self._observation = clc.repo_get(
+            self._clients.metadata_client, hierarchy.collection, hierarchy.obs_id, self._observable.metrics
+        )
+        self._caom2_update_needed = False if self._observation is None else True
+        if self._caom2_update_needed:
+            self._logger.debug(f'Found observation {self._observation.observation_id}')
+
+    def _caom2_store(self):
+        """Update an existing observation instance.  Assumes the obs_id
+        values are set correctly."""
+        if self._caom2_update_needed:
+            clc.repo_update(self._clients.metadata_client, self._observation, self._observable.metrics)
+        else:
+            clc.repo_create(self._clients.metadata_client, self._observation, self._observable.metrics)
+
+    def _caom2_delete_create(self):
+        """Delete an observation instance based on an input parameter."""
+        if self._caom2_update_needed:
+            clc.repo_delete(
+                self._clients.metadata_client,
+                self._observation.collection,
+                self._observation.observation_id,
+                self._observable.metrics,
+            )
+        clc.repo_create(self._clients.metadata_client, self._observation, self._observable.metrics)
+
+    def _cadc_put(self, hierarchy, source_fqn, uri):
+        interim_fqn = self._decompressor.fix_compression(source_fqn)
+        self._clients.data_client.put(os.path.dirname(interim_fqn), uri)
+        # fix FileInfo that becomes out-dated by decompression during a STORE
+        # task, in this common location, affecting all collections
+        if source_fqn != interim_fqn:
+            self._logger.debug(f'Recalculate FileInfo for {interim_fqn}')
+            interim_file_info = get_local_file_info(interim_fqn)
+            # self._metadata_reader.file_info[uri] = interim_file_info
+            hierarchy.file_info = interim_file_info
+
+    def _read_model(self):
+        """Read an observation into memory from an XML file on disk."""
+        self._observation = None
+        if os.path.exists(self._model_fqn):
+            self._observation = mc.read_obs_from_file(self._model_fqn)
+        self._caom2_update_needed = False if self._observation is None else True
+
+    def _store_data(self, hierarchy):
+        for index, entry in enumerate(hierarchy.source_names):
+            if self._config.use_local_files:
+               local_fqn = entry
+            else:
+                temp = urlparse(entry)
+                local_fqn = os.path.join(hierarchy.working_directory, temp.path.split('/')[-1])
+                self._logger.debug(f'Retrieve {entry} to {local_fqn}')
+                self._store_transferrer.get(entry, local_fqn)
+
+            self._logger.debug(f'store the input file {local_fqn} to {hierarchy.destination_uris[index]}')
+            self._cadc_put(local_fqn, hierarchy.destination_uris[index])
+            self._store_transferrer.post_store_check(entry, hierarchy.destination_uris[index])
+
+    def _visit(self, hierarchy):
+        """Execute the visitors that require access to the full data content of a file."""
+        kwargs = {
+            'clients': self._clients,
+            'hierarchy': hierarchy,
+            'config': self._config,
+            'observable': self._observable,
+        }
+        for visitor in self._visitors:
+            try:
+                self._logger.debug(f'Visit for {visitor.__class__.__name__}')
+                self._observation = visitor.visit(self._observation, **kwargs)
+            except Exception as e:
+                raise mc.CadcException(e)
+
+    def _write_model(self):
+        """Write an observation to disk from memory, represented in XML."""
+        if self._observation is not None:
+            logging.error(self._model_fqn)
+            self._logger.debug(f'Write model to {self._model_fqn}.')
+            mc.write_obs_to_file(self._observation, self._model_fqn)
+
+    def execute(self, context):
+        self._logger.debug('Begin execute')
+        self._logger.debug('the steps:')
+        hierarchy = context.get('hierarchy')
+        if self._config.log_to_file:
+            self._model_fqn = os.path.join(self._config._log_file_directory, f'{hierarchy.obs_id}.xml')
+        else:
+            self._model_fqn = os.path.join(hierarchy.working_directory, f'{hierarchy.obs_id}.xml')
+        self._decompressor = decompressor_factory(
+            self._config, hierarchy.working_directory, self.log_level_as, hierarchy
+        )
+        return hierarchy
+
+    @staticmethod
+    def _specify_logging_level_param(logging_level):
+        """Make a configured logging level into command-line parameters."""
+        lookup = {
+            logging.DEBUG: ('--debug', logging.debug),
+            logging.INFO: ('--verbose', logging.info),
+            logging.WARNING: ('', logging.warning),
+            logging.ERROR: ('--quiet', logging.error),
+        }
+        return lookup.get(logging_level, ('', logging.info))
+
+
+class NoFheadVisitWithVisitorsAndContext(CaomExecuteWithVisitorsAndContext):
     """Defines a pipeline step for all the operations that require access to the file on disk for metdata and data
     operations. This is to support HDF5 operations, since at the time of writing, there is no --fhead metadata
     retrieval option for HDF5 files.
@@ -2351,26 +2513,30 @@ class NoFheadVisitWithVisitorsAndContext(CaomExecuteWithVisitors):
         super().__init__(
             clients=clients,
             config=config,
-            metadata_reader=None,
             observable=observable,
             visitors=visitors,
         )
         self._modify_transferrer = transferrer
+        # logging.error(type(clients))
+        # logging.error(type(config))
+        # logging.error(type(observable))
 
     def execute(self, context):
         self._logger.debug('Begin execute with the steps:')
-        self.storage_name = context.get('storage_name')
+        hierarchy = super().execute(context)
+        logging.error(context)
+        hierarchy = context.get('hierarchy')
 
         self._logger.debug('get the input files')
-        for entry in self._storage_name.destination_uris:
-            local_fqn = os.path.join(self._working_dir, os.path.basename(entry))
+        for entry in hierarchy.destination_uris:
+            local_fqn = os.path.join(hierarchy.working_directory, os.path.basename(entry))
             self._modify_transferrer.get(entry, local_fqn)
 
         self._logger.debug('get the observation for the existing model')
-        self._caom2_read()
+        self._caom2_read(hierarchy)
 
         self._logger.debug('execute the visitors')
-        self._visit()
+        self._visit(hierarchy)
 
         self._logger.debug('write the observation to disk for debugging')
         self._write_model()
