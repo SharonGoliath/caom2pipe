@@ -2102,6 +2102,7 @@ class StorageName:
     # scheme for Storage Inventory
     scheme = 'cadc'
     preview_scheme = 'cadc'
+    data_source_extensions = ['.fits']
 
     def __init__(
         self,
