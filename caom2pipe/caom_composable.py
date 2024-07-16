@@ -95,6 +95,7 @@ __all__ = [
     'build_artifact_uri',
     'build_chunk_energy_range',
     'build_chunk_time',
+    'build_plane_uri',
     'build_temporal_wcs_append_sample',
     'build_temporal_wcs_bounds',
     'change_to_simple',
@@ -294,6 +295,12 @@ def build_chunk_time(chunk, header, name):
         chunk.time.exposure = exp_time
         chunk.time.resolution = mc.convert_to_days(exp_time)
     logging.debug(f'End build_chunk_time.')
+
+
+def build_plane_uri(collection, observation_id, product_id):
+    observation_uri_str = mc.CaomName.make_obs_uri_from_obs_id(collection, observation_id)
+    obs_uri = ObservationURI(observation_uri_str)
+    return PlaneURI.get_plane_uri(obs_uri, product_id)
 
 
 def do_something_to_chunks(observation, do_something, headers, file_uri):
