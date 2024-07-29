@@ -111,9 +111,9 @@ def test_run_todo_list_dir_data_source(
     test_config,
     tmpdir,
 ):
-    test_dir = f'{tmpdir}/TEST'
+    test_dir = f'{tmpdir}/abc'
     os.mkdir(test_dir)
-    with open(f'{test_dir}/TEST.xml', 'w') as f:
+    with open(f'{test_dir}/abc.xml', 'w') as f:
         f.write('test content')
 
     read_obs_mock.side_effect = _mock_read
@@ -122,7 +122,7 @@ def test_run_todo_list_dir_data_source(
     test_config.data_sources = ['/test_files/sub_directory']
     test_config.data_source_extensions = ['.fits']
     test_config.task_types = [mc.TaskType.SCRAPE]
-    test_config.logging_level = 'DEBUG'
+    test_config.logging_level = 'INFO'
     test_result = rc.run_by_todo(config=test_config)
     assert test_result is not None, 'expect a result'
     assert test_result == 0, 'expect success'

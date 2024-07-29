@@ -154,6 +154,7 @@ class MetadataReader:
             if entry not in self._file_info:
                 self._logger.debug(f'Retrieve FileInfo for {entry}')
                 self._retrieve_file_info(entry, storage_name.source_names[index])
+            storage_name.file_info = self._file_info.get(entry)
         self._logger.debug('End set_file_info')
 
     def set_headers(self, storage_name):
@@ -163,6 +164,7 @@ class MetadataReader:
             if entry not in self._headers:
                 self._logger.debug(f'Retrieve headers for {entry}')
                 self._retrieve_headers(entry, storage_name.source_names[index])
+            storage_name.metadata = self._headers.get(entry)
         self._logger.debug('End set_headers')
 
     def reset(self):
@@ -226,6 +228,7 @@ class Hdf5FileMetadataReader(FileMetadataReader):
                     f'Retrieve FileInfo for {entry} {storage_name.get_file_fqn(self._working_directory)}'
                 )
                 self._retrieve_file_info(entry, storage_name.get_file_fqn(self._working_directory))
+            storage_name.file_info = self._file_info.get(entry)
         self._logger.debug('End set_file_info')
 
     def set_headers(self, storage_name):
@@ -241,6 +244,7 @@ class Hdf5FileMetadataReader(FileMetadataReader):
                     super()._retrieve_headers(entry, storage_name.get_file_fqn(self._working_directory))
                 else:
                     self._headers[entry] = []
+            storage_name.metadata = self._headers.get(entry)
         self._logger.debug('End set_headers')
 
     def _retrieve_headers(self, key, fqn):
@@ -304,6 +308,7 @@ class StorageClientReader(MetadataReader):
         for entry in storage_name.destination_uris:
             if entry not in self._file_info:
                 self._retrieve_file_info(entry, entry)
+            storage_name.file_info = self._file_info.get(entry)
         self._logger.debug('End set_file_info')
 
     def set_headers(self, storage_name):
@@ -312,6 +317,7 @@ class StorageClientReader(MetadataReader):
         for entry in storage_name.destination_uris:
             if entry not in self._headers:
                 self._retrieve_headers(entry, entry)
+            storage_name.metadata = self._headers.get(entry)
         self._logger.debug('End set_headers')
 
 
