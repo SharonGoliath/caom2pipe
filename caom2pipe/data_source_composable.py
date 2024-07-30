@@ -340,6 +340,8 @@ class ListDirSeparateDataSource(DataSource):
     This specialization is meant to imitate the behaviour of the original
     "ListDirDataSource", with different assumptions about which directories
     to use as a source of files, and how to identify files of interest.
+
+    This specialization makes minimalistic checking choices so large file sets aren't unbearably slow.
     """
 
     def __init__(self, config):
@@ -348,6 +350,14 @@ class ListDirSeparateDataSource(DataSource):
         self._extensions = config.data_source_extensions
         self._recursive = config.recurse_data_sources
         self._work = deque()
+
+    def default_filter(self, entry):
+        work_with_file = False
+        for extension in self._extensions:
+            if entry.name.endswith(extension):
+                work_with_file = True
+                break
+        return work_with_file
 
     def get_work(self):
         self._logger.debug(f'Begin get_work.')
@@ -364,13 +374,9 @@ class ListDirSeparateDataSource(DataSource):
                 if entry.is_dir() and self._recursive:
                     self._append_work(entry.path)
                 else:
-                    for extension in self._extensions:
-                        if entry.name.endswith(extension):
-                            self._logger.debug(
-                                f'Adding {entry.path} to work list.'
-                            )
-                            self._work.append(entry.path)
-                            break
+                    if self.default_filter(entry):
+                        self._logger.debug(f'Adding {entry.path} to work list.')
+                        self._work.append(entry.path)
 
 
 class ListDirTimeBoxDataSource(IncrementalDataSource):
@@ -1056,7 +1062,8 @@ def data_source_factory(config, clients, state, reader, reporter):
     :return: DataSource specialization
     """
     if config.use_local_files:
-        source = ListDirSeparateDataSource(config)
+        # by default call fitsverify as part of setting up local file use
+        source = LocalFilesDataSource(config, clients.data_client, reader, config.recurse_data_sources, config.scheme)
     else:
         if config.use_vos and clients.vo_client is not None:
             if config.cleanup_files_when_storing:

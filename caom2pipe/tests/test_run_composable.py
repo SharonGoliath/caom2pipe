@@ -168,7 +168,8 @@ def test_run_todo_list_dir_data_source_invalid_fname(clients_mock, test_config, 
 
     test_builder = TStorageNameInstanceBuilder()
     test_chooser = ec.OrganizeChooser()
-    test_result = rc.run_by_todo(config=test_config, chooser=test_chooser, name_builder=test_builder)
+    data_source = dsc.ListDirSeparateDataSource(test_config)
+    test_result = rc.run_by_todo(config=test_config, chooser=test_chooser, sources=[data_source], name_builder=test_builder)
     assert test_result is not None, 'expect a result'
     assert test_result == -1, 'expect failure, because of file naming'
     assert os.path.exists(test_config.failure_fqn), 'expect failure file'
@@ -713,6 +714,49 @@ def test_run_store_ingest_failure(
     assert not caom2_store_mock.called, 'no _caom2_store call'
     assert not reader_file_info_mock.called, 'info'
     assert not reader_headers_mock.called, 'get_head should be called'
+
+
+@patch('caom2pipe.execute_composable.CaomExecute._caom2_store')
+@patch('caom2pipe.execute_composable.CaomExecute._visit_meta')
+@patch('caom2pipe.client_composable.ClientCollection')
+def test_run_store_fitsverify_failure(
+    clients_mock,
+    visit_meta_mock,
+    caom2_store_mock,
+    test_config,
+    tmpdir,
+):
+    # check that the default DataSource behaviour (LocalFilesDataSource) calls fitsverify
+    test_config.change_working_directory(tmpdir)
+    test_config.task_types = [mc.TaskType.STORE, mc.TaskType.INGEST]
+    test_config.use_local_files = True
+    test_config.cleanup_files_when_storing = False
+    test_config.data_sources = ['/test_files/sub_directory_broken']
+    test_config.data_source_extensions = ['.fits']
+    test_config.logging_level = 'DEBUG'
+    test_config.proxy_file_name = 'cadcproxy.pem'
+    test_config.retry_failures = True
+    test_config.write_to_file(test_config)
+
+    with open(test_config.proxy_fqn, 'w') as f:
+        f.write('test content')
+
+    test_result = rc.run_by_todo()
+    assert test_result is not None, 'expect result'
+    assert test_result == 0, 'expect success'
+    # execution stops before this call should be made
+    assert not clients_mock.return_value.metadata_client.read.called, 'no read'
+    assert not clients_mock.return_value.data_client.put.called, 'put should be called'
+    assert clients_mock.return_value.data_client.put.call_count == 0, 'wrong number of puts'
+    assert not visit_meta_mock.called, 'no _visit_meta call'
+    assert not caom2_store_mock.called, 'no _caom2_store call'
+    test_report = mc.ExecutionSummary.read_report_file(test_config.report_fqn)
+    assert test_report is not None, 'expect a text report'
+    assert test_report._rejected_sum == 1, 'fitsverify rejection'
+    assert test_report._errors_sum == 1, 'fitsverify rejection'
+    assert test_report._retry_sum == 0, 'no retries'
+    assert test_report._entries_sum == 1, 'found a fits file'
+    assert test_report._success_sum == 0, 'did not try to process the broken file'
 
 
 @patch('caom2utils.data_util.get_local_file_headers')
