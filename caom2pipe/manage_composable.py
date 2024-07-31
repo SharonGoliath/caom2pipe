@@ -3070,6 +3070,7 @@ def _parse_plus_some_formats(from_value):
             '%Y_%m_%dT%H_%M_%S.%f',
             '%Y-%m-%dHST%H:%M:%S',
             '%Y%b%d',
+            '%y%b%d:%H:%M:%S.%f',
         ]:
             try:
                 result = datetime.strptime(from_value, fmt)
