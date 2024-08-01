@@ -218,7 +218,7 @@ class IncrementalDataSource(DataSource):
 
     @end_dt.setter
     def end_dt(self, value):
-        self._end_dt = value
+        self._end_dt = mc.make_datetime(value)
 
     @property
     def start_dt(self):
@@ -226,7 +226,7 @@ class IncrementalDataSource(DataSource):
 
     @start_dt.setter
     def start_dt(self, value):
-        self._start_dt = value
+        self._start_dt = mc.make_datetime(value)
 
     @property
     def start_key(self):
@@ -258,6 +258,9 @@ class IncrementalDataSource(DataSource):
         Do what needs to be done to set end_dt for an incremental harvest.
         """
         self._logger.debug('Begin initialize_end_dt')
+        if self._state is None:
+            # this covers the validation use case, when start date is not obtained from the state.yml file
+            self._state = mc.State(self._config.state_fqn, self._config.time_zone)
         end_timestamp = self._state.bookmarks.get(self._start_key).get('end_timestamp')
         if end_timestamp is None:
             self._initialize_end_dt()
