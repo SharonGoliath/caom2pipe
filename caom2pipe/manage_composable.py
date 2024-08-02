@@ -2129,6 +2129,8 @@ class StorageName:
         self._stage_names = []
         # str - the file name with all file type and compression extensions removed
         self._file_id = None
+        self._metadata = None
+        self._file_info = None
         self._logger = logging.getLogger(self.__class__.__name__)
         self.set_destination_uris()
         self.set_file_id()
@@ -2156,6 +2158,14 @@ class StorageName:
         return self._file_id
 
     @property
+    def file_info(self):
+        return self._file_info
+
+    @file_info.setter
+    def file_info(self, value):
+        self._file_info = value
+
+    @property
     def file_uri(self):
         """The CADC Storage URI for the file."""
         return self._get_uri(
@@ -2174,6 +2184,14 @@ class StorageName:
     @property
     def hdf5(self):
         return StorageName.is_hdf5(self._file_name)
+
+    @property
+    def metadata(self):
+        return self._metadata
+
+    @metadata.setter
+    def metadata(self, value):
+        self._metadata = value
 
     @property
     def model_file_name(self):
@@ -3060,6 +3078,7 @@ def _parse_plus_some_formats(from_value):
             '%Y_%m_%dT%H_%M_%S.%f',
             '%Y-%m-%dHST%H:%M:%S',
             '%Y%b%d',
+            '%y%b%d:%H:%M:%S.%f',
         ]:
             try:
                 result = datetime.strptime(from_value, fmt)
