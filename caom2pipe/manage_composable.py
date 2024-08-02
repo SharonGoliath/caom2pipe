@@ -2125,8 +2125,9 @@ class StorageName:
         # list of str - the Artifact URIs as represented at CADC. Sufficient
         # for storing/retrieving to/from CADC.
         self._destination_uris = []
-        # str - the file name with all file type and compression extensions
-        # removed
+        # if the original file names need to be renamed for some reason
+        self._stage_names = []
+        # str - the file name with all file type and compression extensions removed
         self._file_id = None
         self._logger = logging.getLogger(self.__class__.__name__)
         self.set_destination_uris()
@@ -2230,6 +2231,10 @@ class StorageName:
         self.set_destination_uris()
 
     @property
+    def stage_names(self):
+        return self._stage_names
+
+    @property
     def is_feasible(self):
         """
         To support the exclusion of CFHT HDF5 files in the pipeline.
@@ -2272,6 +2277,9 @@ class StorageName:
     def set_product_id(self, **kwargs):
         if self._product_id is None:
             self._product_id = self._file_id
+
+    def set_staging_name(self, value):
+        self._stage_names.append(value)
 
     @staticmethod
     def remove_extensions(name):
