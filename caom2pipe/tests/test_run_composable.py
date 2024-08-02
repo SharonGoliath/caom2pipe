@@ -1647,6 +1647,61 @@ def test_run_state_store_ingest_local_retry(
         os.chdir(orig_getcwd)
 
 
+def test_state_runner_reporter(test_config, tmp_path, change_test_dir):
+    # make sure the StateRunner goes through at least one time box check, and creates the
+    # right log locations
+    test_config.change_working_directory(tmp_path)
+    test_config.task_types = [mc.TaskType.STORE, mc.TaskType.INGEST, mc.TaskType.MODIFY]
+    test_config.data_sources = ['test/acacia:possum1234']
+    test_config.interval = 60 * 48  # work in time-boxes of 2 days => 60m * 48h
+    test_organizer = Mock()
+    # the time-box times, or, this is "when" the code looks
+    test_start_time = mc.make_datetime('2023-10-28T20:47:49.000000000Z')
+    test_end_time = mc.make_datetime('2023-11-28T20:47:49.000000000Z')
+    test_data_source = Mock()
+    end_time_mock = PropertyMock(return_value=test_end_time)
+    start_time_mock = PropertyMock(return_value=test_start_time)
+    type(test_data_source).end_dt = end_time_mock
+    type(test_data_source).start_dt = start_time_mock
+    # the execution times, or, this is "what" the code finds
+    test_entry_time = mc.make_datetime('2023-11-28T08:47:49.000000000Z')
+    execution_unit_mock = Mock()
+    type(execution_unit_mock).entry_dt = test_entry_time
+    type(execution_unit_mock).num_entries = 1
+    execution_unit_mock.do.return_value = 0
+    test_data_source.get_time_box_work.return_value = execution_unit_mock
+    test_data_sources = [test_data_source]
+    test_observable = Mock()
+    test_reporter = mc.ExecutionReporter(test_config, test_observable)
+    test_subject = rc.ExecutionUnitStateRunner(
+        test_config,
+        test_organizer,
+        test_data_sources,
+        test_observable,
+        test_reporter,
+    )
+    test_result = test_subject.run()
+    assert test_result is not None, 'expect a result'
+    assert test_result == 0, 'happy path'
+    assert test_organizer.mock_calls == [], 'organizer'
+    assert test_data_source.initialize_start_dt.called, 'initialize_start_dt'
+    assert test_data_source.initialize_start_dt.call_count == 1, 'initialize_start_dt count'
+    assert test_data_source.initialize_end_dt.called, 'initialize_end_dt'
+    assert test_data_source.initialize_end_dt.call_count == 1, 'initialize_end_dt count'
+    assert test_data_source.get_time_box_work.called, 'get_time_box_work'
+    # 16 == number of days / 2 between the start and end times
+    assert test_data_source.get_time_box_work.call_count == 16, 'get_time_box_work count'
+    test_observable.assert_has_calls([]), 'observable calls'
+    assert os.path.exists(test_config.failure_fqn), 'failure'
+    assert os.path.exists(test_config.progress_fqn), 'progress'
+    assert os.path.exists(test_config.success_fqn), 'success'
+    assert os.path.exists(test_config.retry_fqn), 'retries'
+    assert os.path.exists(test_config.total_retry_fqn), 'total_retries'
+    assert os.path.exists(test_config.report_fqn), 'report'
+    assert test_reporter.success == 0, 'reporter success'
+    assert test_reporter.all == 0, 'reporter all'
+
+
 def _write_todo(test_config):
     with open(test_config.work_fqn, 'w') as f:
         f.write(f'test_obs_id.fits.gz')

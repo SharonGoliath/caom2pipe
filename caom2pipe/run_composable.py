@@ -95,6 +95,7 @@ from caom2pipe import transfer_composable
 
 __all__ = [
     'common_runner_init',
+    'ExecutionUnitStateRunner',
     'run_by_state',
     'run_by_todo',
     'set_logging',
@@ -291,7 +292,8 @@ class StateRunner(TodoRunner):
 
     def _process_data_source(self, data_source):
         """
-        Uses an iterable with an instance of StateRunnerMeta.
+        Uses an iterable with an instance of StateRunnerMeta. Uses a StateRunnerMeta as the unit of work,
+        and the TodoRunner implementation to carry out the unit of work.
 
         :return: 0 for success, -1 for failure
         """
@@ -389,6 +391,91 @@ class StateRunner(TodoRunner):
                         f_out.write(line)
         else:
             self._logger.warning(f'No existing total retry file {self._config.total_retry_fqn}')
+
+
+class ExecutionUnitStateRunner(StateRunner):
+    """
+    This class brings together the mechanisms for identifying the time-boxed lists of work to be done (DataSource
+    specializations), and the mechanisms for translating a unit of work into something that CaomExecute can work with.
+
+    For retries, accumulate the retry-able entries in a single file for each time-box interval, for each data source.
+    After all the incremental execution, attempt the retries.
+    """
+
+    def __init__(
+        self,
+        config,
+        organizer,
+        data_sources,
+        observable,
+        reporter,
+    ):
+        super().__init__(
+            config=config,
+            organizer=organizer,
+            builder=None,
+            data_sources=data_sources,
+            metadata_reader=None,
+            observable=observable,
+            reporter=reporter,
+        )
+
+    def _process_data_source(self, data_source):
+        """
+        Uses an iterable with an instance of StateRunnerMeta. Uses an ExecutionUnit to carry out the unit of work.
+
+        :return: 0 for success, -1 for failure
+        """
+        data_source.initialize_start_dt()
+        data_source.initialize_end_dt()
+        prev_exec_time = data_source.start_dt
+        incremented = mc.increment_time(prev_exec_time, self._config.interval)
+        exec_time = min(incremented, data_source.end_dt)
+
+        self._logger.info(f'Starting at {prev_exec_time}, ending at {data_source.end_dt}')
+        result = 0
+        if prev_exec_time == data_source.end_dt:
+            self._logger.info(f'Start time is the same as end time {prev_exec_time}, stopping.')
+            exec_time = prev_exec_time
+        else:
+            cumulative = 0
+            result = 0
+            while exec_time <= data_source.end_dt:
+                self._logger.info(f'Processing {data_source.start_key} from {prev_exec_time} to {exec_time}')
+                save_time = exec_time
+                self._reporter.set_log_location(self._config)
+                work = data_source.get_time_box_work(prev_exec_time, exec_time)
+                if work.num_entries > 0:
+                    try:
+                        self._logger.info(f'Processing {work.num_entries} entries.')
+                        result |= work.do()
+                    finally:
+                        work.stop()
+                    save_time = min(work.entry_dt, exec_time)
+                    self._record_retries()
+                self._record_progress(work.num_entries, cumulative, prev_exec_time, save_time)
+                data_source.save_start_dt(save_time)
+                if exec_time == data_source.end_dt:
+                    # the last interval will always have the exec time equal to the end time, which will fail the
+                    # while check so leave after the last interval has been processed
+                    #
+                    # but the while <= check is required so that an interval smaller than exec_time -> end_time will
+                    # get executed, so don't get rid of the '=' in the while loop comparison, just because this one
+                    # exists
+                    break
+                prev_exec_time = exec_time
+                new_time = mc.increment_time(prev_exec_time, self._config.interval)
+                exec_time = min(new_time, data_source.end_dt)
+                cumulative += work.num_entries
+
+        data_source.save_start_dt(exec_time)
+        msg = f'Done for {data_source.start_key}, saved state is {exec_time}'
+        self._logger.info('=' * len(msg))
+        self._logger.info(msg)
+        self._logger.info(f'{self._reporter.success} of {self._reporter.all} records processed correctly.')
+        self._logger.info('=' * len(msg))
+        self._logger.debug(f'End _process_data_source with result {result}')
+        return result
 
 
 def set_logging(config):

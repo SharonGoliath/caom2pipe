@@ -6,6 +6,7 @@ from .execute_composable import *  # noqa
 from .html_data_source import *  # noqa
 from .manage_composable import *  # noqa
 from .name_builder_composable import *  # noqa
+from .remote_composable import *  # noqa
 from .run_composable import *  # noqa
 from .transfer_composable import *  # noqa
 from .translate_composable import *  # noqa

@@ -720,6 +720,76 @@ class TodoFileDataSource(DataSource):
         return self._work
 
 
+class RemoteRcloneIncrementalDataSource(IncrementalDataSource):
+    """rclone incremental commands for data source checking."""
+
+    def __init__(self, config, start_key, metadata_reader, **kwargs):
+        super().__init__(config, start_key)
+        self._data_source_extensions = config.lookup.get('rclone_include_pattern')
+        self._metadata_reader = metadata_reader
+        self._kwargs = kwargs
+        # adjust config file syntax for the data sources, which was done so it would work with basic yaml
+        if 'pawsey' in start_key:
+            self._remote_key = start_key.replace('/', ':', 1)
+        else:
+            self._remote_key = start_key
+
+    def _capture_todo(self):
+        self._reporter.capture_todo(len(self._metadata_reader.file_info), self._rejected_files, self._skipped_files)
+        # do not need the record of the rejected or skipped files any longer
+        self._rejected_files = 0
+        self._skipped_files = 0
+
+    def _initialize_end_dt(self):
+        self._logger.debug('Begin _initialize_end_dt')
+        end_timestamp = self._state.bookmarks.get(self._start_key).get('end_timestamp')
+        if end_timestamp is None:
+            output = mc.exec_cmd_info(f'rclone lsjson {self._remote_key} --recursive --max-age={self._start_dt.isoformat()} --include={self._data_source_extensions}')
+        else:
+            output = mc.exec_cmd_info(f'rclone lsjson {self._remote_key} --recursive --max-age={self._start_dt.isoformat()} --min-age={end_timestamp.isoformat()} --include={self._data_source_extensions}')
+
+        self._metadata_reader.seed(output)
+        if self._metadata_reader.max_dt:
+            self._end_dt = self._metadata_reader.max_dt
+        else:
+            if end_timestamp:
+                self._end_dt = mc.make_datetime(end_timestamp)
+            else:
+                self._end_dt = datetime.now()
+        self._capture_todo()
+        self._logger.debug(f'End _initialize_end_dt with {self._end_dt}')
+
+    def get_time_box_work(self, prev_exec_dt, exec_dt):
+        raise NotImplementedError
+
+
+class RemoteListDirDataSource(ListDirSeparateDataSource):
+
+    def __init__(self, config):
+        super().__init__(config)
+        self._num_entries = None
+
+    @property
+    def num_entries(self):
+        return self._num_entries
+
+    def _capture_todo(self):
+        # do not update total record count, that's already been done in the RemoteIncrementalDataSource
+        pass
+
+    def default_filter(self, entry):
+        work_with_file = False
+        if super().default_filter(entry):
+            if ac.check_fitsverify(entry.path):
+                work_with_file = True
+        return work_with_file
+
+    def get_work(self):
+        result = super().get_work()
+        self._num_entries = len(result)
+        return result
+
+
 class RetryTodoFileDataSource(TodoFileDataSource):
     """
     Extends the TodoFileDataSource to not update the "Number of Inputs" report line when retrying ingestion.

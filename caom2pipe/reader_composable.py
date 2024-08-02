@@ -400,7 +400,6 @@ class RemoteRcloneMetadataReader(FileMetadataReader):
         content = json.loads(with_content)
         for entry in content:
             name = entry.get('Name')
-            # if name.startswith('PSM') or '.fits' in name:
             if '.fits' in name:
                 # keys are destination URIs
                 try:
@@ -433,6 +432,7 @@ class RemoteRcloneMetadataReader(FileMetadataReader):
             if entry not in self._headers and os.path.basename(entry) == os.path.basename(fqn):
                 self._logger.debug(f'Retrieve headers for {entry}')
                 self._retrieve_headers(entry, fqn)
+                storage_name.metadata = self._headers.get(entry)
         if storage_name.file_uri not in self._storage_names:
             self._storage_names[storage_name.file_uri] = storage_name
         self._logger.debug('End set_headers')
