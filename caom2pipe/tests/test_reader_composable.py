@@ -69,6 +69,7 @@
 from datetime import datetime
 from os.path import basename
 from caom2pipe import manage_composable as mc
+from caom2pipe.name_builder_composable import GuessingBuilder
 from caom2pipe import reader_composable
 
 from mock import Mock, patch
@@ -143,7 +144,8 @@ def test_remote_metadata_reader_file_info_and_todo_reader(header_mock, md5_mock,
 
     input_file = f'{test_data_dir}/rclone_mock/rclone_lsjson.json'
     test_file_uri = 'cadc:OMM/PSM.band1.0049-51.10887.i.fits'
-    test_subject = reader_composable.RemoteRcloneMetadataReader()
+    test_builder = GuessingBuilder(mc.StorageName)
+    test_subject = reader_composable.RemoteRcloneMetadataReader(test_builder)
 
     with open(input_file) as f:
         test_subject.seed(f.read())
@@ -155,21 +157,12 @@ def test_remote_metadata_reader_file_info_and_todo_reader(header_mock, md5_mock,
     assert test_result.file_type == 'application/fits', 'wrong file type'
     assert test_result.lastmod == datetime(2023, 11, 18, 20, 47, 50), 'wrong modification time'
 
-    test_storage_name_in = mc.StorageName(file_name=basename(test_result.id), source_names=[test_result.id])
-    test_subject.set_headers(test_storage_name_in, test_result.id)
-
+    assert len(test_subject.storage_names) == 4, 'wrong number of results'
     test_storage_name = test_subject.storage_names.get(test_file_uri)
+    assert test_storage_name is not None, 'expect a result'
+    assert test_storage_name.file_info is not None, 'expect  file info result'
+    assert test_storage_name.file_info.size == test_result.size, 'wrong size'
+    assert test_storage_name.file_info.file_type == test_result.file_type, 'wrong file type'
+    assert test_storage_name.file_info.lastmod == test_result.lastmod, 'wrong modification time'
+    assert test_storage_name.metadata is None, 'expect no metadata yet'
     assert test_storage_name.file_uri == test_file_uri, 'wrong file uri'
-
-    # this test is a bit circuitous, because it's meant to test a case where a file gets renamed between retrieval
-    # from the data provider and storage at CADC
-    test_subject_2 = reader_composable.TodoRcloneMetadataReader(test_subject)
-    test_storage_name_in.set_staging_name(test_file_uri)
-    test_subject_2.set(test_storage_name_in)
-    assert len(test_subject_2.file_info) == 1, 'wrong bit of file_info'
-    test_file_info_result = test_subject_2.file_info.get(test_file_uri)
-    assert test_file_info_result.size == 4831848000, 'renamed wrong size'
-    assert test_file_info_result.file_type == 'application/fits', 'renamed wrong file type'
-    assert test_file_info_result.lastmod == datetime(2023, 11, 18, 20, 47, 50), 'renamed wrong modification time'
-    assert test_file_info_result.md5sum == 'md5:abc', 'renamed wrong md5sum'
-    assert len(test_subject_2.headers) == 1, 'wrong header content'

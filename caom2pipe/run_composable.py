@@ -119,7 +119,6 @@ class TodoRunner:
         builder,
         data_sources,
         metadata_reader,
-        observable,
         reporter,
     ):
         self._builder = builder
@@ -130,7 +129,7 @@ class TodoRunner:
         # the list of work to be done, containing whatever is returned from
         # the DataSource instance
         self._todo_list = []
-        self._observable = observable
+        self._observable = reporter.observable
         self._reporter = reporter
         # the type of data source for retry is the TodoFileDataSource, which might be different from the originals
         self._retry_data_source = None
@@ -255,19 +254,8 @@ class StateRunner(TodoRunner):
     After all the incremental execution, attempt the retries.
     """
 
-    def __init__(
-        self,
-        config,
-        organizer,
-        builder,
-        data_sources,
-        metadata_reader,
-        observable,
-        reporter,
-    ):
-        super().__init__(
-            config, organizer, builder, data_sources, metadata_reader, observable, reporter
-        )
+    def __init__(self, config, organizer, builder, data_sources, metadata_reader, reporter):
+        super().__init__(config, organizer, builder, data_sources, metadata_reader, reporter)
 
     def run(self):
         """
@@ -402,21 +390,13 @@ class ExecutionUnitStateRunner(StateRunner):
     After all the incremental execution, attempt the retries.
     """
 
-    def __init__(
-        self,
-        config,
-        organizer,
-        data_sources,
-        observable,
-        reporter,
-    ):
+    def __init__(self, config, organizer, data_sources, reporter):
         super().__init__(
             config=config,
             organizer=organizer,
             builder=None,
             data_sources=data_sources,
             metadata_reader=None,
-            observable=observable,
             reporter=reporter,
         )
 
@@ -574,7 +554,7 @@ def common_runner_init(
         modify_transfer,
         metadata_reader,
         clients,
-        observable,
+        reporter,
     )
 
     return (
@@ -584,7 +564,6 @@ def common_runner_init(
         sources,
         metadata_reader,
         organizer,
-        observable,
         reporter,
     )
 
@@ -637,7 +616,6 @@ def run_by_todo(
         sources,
         metadata_reader,
         organizer,
-        observable,
         reporter,
     ) = common_runner_init(
         config,
@@ -656,7 +634,7 @@ def run_by_todo(
     )
 
     runner = TodoRunner(
-        config, organizer, name_builder, sources, metadata_reader, observable, reporter
+        config, organizer, name_builder, sources, metadata_reader, reporter
     )
     result = runner.run()
     result |= runner.run_retry()
@@ -712,7 +690,6 @@ def run_by_state(
         sources,
         metadata_reader,
         organizer,
-        observable,
         reporter,
     ) = common_runner_init(
         config,
@@ -735,7 +712,6 @@ def run_by_state(
         name_builder,
         sources,
         metadata_reader,
-        observable,
         reporter,
     )
     result = runner.run()
@@ -793,7 +769,7 @@ def run_single(
         modify_transfer,
         metadata_reader,
         clients,
-        observable,
+        reporter,
     )
     organizer.choose()
     result = organizer.do_one(storage_name)

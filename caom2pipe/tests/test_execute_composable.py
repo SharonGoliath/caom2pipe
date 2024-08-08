@@ -138,13 +138,14 @@ def test_meta_visit_delete_create_execute(access_mock, test_config, tmpdir):
     clients._data_client = data_client_mock
     clients._metadata_client = repo_client_mock
     test_observer = Mock()
+    test_reporter = mc.ExecutionReporter(test_config, test_observer)
     test_sn = tc.TStorageName()
     test_config.change_working_directory(tmpdir)
     os.mkdir(os.path.join(tmpdir, test_sn.obs_id))
     test_executor = ec.MetaVisitDeleteCreate(
         test_config,
         [],
-        observable=test_observer,
+        reporter=test_reporter,
         metadata_reader=Mock(autospec=True),
         clients=clients,
     )
@@ -161,6 +162,7 @@ def test_client_visit(access_mock, test_config):
     repo_client_mock = Mock()
     metadata_reader_mock = Mock()
     test_observer = Mock()
+    test_reporter = mc.ExecutionReporter(test_config, test_observer)
     clients = ClientCollection(test_config)
     clients._data_client = data_client_mock
     clients._metadata_client = repo_client_mock
@@ -170,7 +172,7 @@ def test_client_visit(access_mock, test_config):
         test_executor = ec.MetaVisit(
             test_config,
             meta_visitors=None,
-            observable=test_observer,
+            reporter=test_reporter,
             metadata_reader=metadata_reader_mock,
             clients=clients,
         )
@@ -203,6 +205,7 @@ def test_data_execute(access_mock, test_config, tmpdir):
     clients._data_client = data_client_mock
     clients._metadata_client = repo_client_mock
     test_observer = Mock()
+    test_reporter = mc.ExecutionReporter(test_config, test_observer)
     test_transferrer = transfer_composable.VoTransfer()
     test_transferrer.cadc_client = data_client_mock
 
@@ -213,7 +216,7 @@ def test_data_execute(access_mock, test_config, tmpdir):
     test_executor = ec.DataVisit(
         test_config,
         test_data_visitors,
-        test_observer,
+        test_reporter,
         test_transferrer,
         clients,
         metadata_reader=Mock(autospec=True),
@@ -245,6 +248,7 @@ def test_data_execute_v(access_mock, test_config, tmpdir):
     clients._data_client = cadc_client_mock
     clients._metadata_client = repo_client_mock
     test_observer = Mock(autospec=True)
+    test_reporter = mc.ExecutionReporter(test_config, test_observer)
     test_transferrer = transfer_composable.VoTransfer()
     test_transferrer.cadc_client = cadc_client_mock
 
@@ -258,7 +262,7 @@ def test_data_execute_v(access_mock, test_config, tmpdir):
     test_executor = ec.DataVisit(
         test_config,
         test_data_visitors,
-        test_observer,
+        test_reporter,
         test_transferrer,
         clients,
         metadata_reader=Mock(autospec=True),
@@ -293,6 +297,7 @@ def test_data_local_execute(access_mock, test_config):
     clients._data_client = data_client_mock
     clients._metadata_client = repo_client_mock
     test_observer = Mock()
+    test_reporter = mc.ExecutionReporter(test_config, test_observer)
 
     test_model_fqn = os.path.join(tc.TEST_DATA_DIR, 'test_obs_id.xml')
     # check that a file is written to disk
@@ -303,7 +308,7 @@ def test_data_local_execute(access_mock, test_config):
     test_executor = ec.LocalDataVisit(
         test_config,
         test_data_visitors,
-        observable=test_observer,
+        reporter=test_reporter,
         clients=clients,
         metadata_reader=None,
     )
@@ -329,6 +334,7 @@ def test_data_store(fix_mock, access_mock, test_config, tmpdir):
     clients = ClientCollection(test_config)
     clients._data_client = data_client_mock
     test_observer = Mock()
+    test_reporter = mc.ExecutionReporter(test_config, test_observer)
     # stat mock is for CadcDataClient
     stat_orig = os.stat
     os.stat = Mock()
@@ -344,7 +350,7 @@ def test_data_store(fix_mock, access_mock, test_config, tmpdir):
         test_config.change_working_directory(tmpdir)
         test_executor = ec.Store(
             test_config,
-            observable=test_observer,
+            reporter=test_reporter,
             transferrer=transfer_composable.Transfer(),
             clients=clients,
             metadata_reader=mock_metadata_reader,
@@ -626,6 +632,7 @@ def test_data_visit(client_mock, access_mock, test_config, tmpdir):
     )
     test_data_visitors = [dv_mock]
     test_observable = Mock(autospec=True)
+    test_reporter = mc.ExecutionReporter(test_config, test_observable)
     mc.StorageName.collection = 'TEST'
     mc.StorageName.collection_pattern = 'T[\\w+-]+'
     test_sn = mc.StorageName(
@@ -641,7 +648,7 @@ def test_data_visit(client_mock, access_mock, test_config, tmpdir):
     test_subject = ec.DataVisit(
         test_config,
         test_data_visitors,
-        test_observable,
+        test_reporter,
         test_transferrer,
         clients,
         metadata_reader=Mock(autospec=True),
@@ -678,6 +685,7 @@ def test_store(compressor_mock, access_mock, file_info_mock, test_config, tmpdir
     clients = ClientCollection(test_config)
     clients._data_client = test_data_client
     test_observable = Mock(autospec=True)
+    test_reporter = mc.ExecutionReporter(test_config, test_observable)
     test_transferrer = Mock(autospec=True)
     test_transferrer.get.side_effect = _transfer_get_mock
     test_metadata_reader = Mock(autospec=True)
@@ -688,7 +696,7 @@ def test_store(compressor_mock, access_mock, file_info_mock, test_config, tmpdir
     )
     test_subject = ec.Store(
         test_config,
-        test_observable,
+        test_reporter,
         clients,
         metadata_reader=test_metadata_reader,
         transferrer=test_transferrer,
@@ -731,11 +739,12 @@ def test_local_store(compressor_mock, access_mock, file_info_mock, test_config):
     clients = ClientCollection(test_config)
     clients._data_client = test_data_client
     test_observable = Mock(autospec=True)
+    test_reporter = mc.ExecutionReporter(test_config, test_observable)
     test_metadata_reader = Mock(autospec=True)
     test_metadata_reader.file_info = {}
     test_subject = ec.Store(
         test_config,
-        test_observable,
+        test_reporter,
         clients,
         metadata_reader=test_metadata_reader,
         transferrer=transfer_composable.Transfer(),  # noop for a use_local_files=True store action
@@ -792,6 +801,7 @@ def test_store_newer_files_only_flag_client(
     du = [f'cadc:TEST/{test_f_name}']
     test_sn = FlagStorageName(test_f_name, sn)
     observable_mock = Mock(autospec=True)
+    test_reporter = mc.ExecutionReporter(test_config, observable_mock)
     client_mock.cadcinfo.return_value = FileInfo(
         id=du[0], md5sum='d41d8cd98f00b204e9800998ecf8427e'
     )
@@ -800,7 +810,7 @@ def test_store_newer_files_only_flag_client(
 
     test_subject = ec.Store(
         test_config,
-        observable_mock,
+        test_reporter,
         clients,
         metadata_reader=Mock(autospec=True),
         transferrer=transfer_composable.Transfer(),
@@ -848,6 +858,7 @@ def test_data_visit_params(access_mock, client_mock, test_config, tmpdir):
     )
     test_data_visitors = [data_visitor]
     test_observable = Mock(autospec=True)
+    test_reporter = mc.ExecutionReporter(test_config, test_observable)
     test_transferrer = Mock(autospec=True)
 
     os.mkdir(os.path.join(test_config.working_directory, storage_name.obs_id))
@@ -855,7 +866,7 @@ def test_data_visit_params(access_mock, client_mock, test_config, tmpdir):
     test_subject = ec.DataVisit(
         test_config,
         test_data_visitors,
-        test_observable,
+        test_reporter,
         test_transferrer,
         clients,
         metadata_reader=Mock(autospec=True),
@@ -868,7 +879,7 @@ def test_data_visit_params(access_mock, client_mock, test_config, tmpdir):
         working_directory=f'{tmpdir}/abc',
         storage_name=storage_name,
         log_file_directory=f'{tmpdir}/logs',
-        observable=ANY,
+        reporter=ANY,
         clients=ANY,
         metadata_reader=ANY,
         config=ANY,
@@ -940,6 +951,7 @@ class TestDoOne:
         test_config.change_working_directory(tmp_path)
         self._reader = Mock()
         self._observer = mc.Observable(test_config)
+        self._reporter = mc.ExecutionReporter(test_config, self._observer)
         self._clients = Mock()
         self._storage_name = tc.TStorageName()
 
@@ -953,7 +965,7 @@ class TestDoOne:
             test_meta,
             [],
             metadata_reader=self._reader,
-            observable=self._observer,
+            reporter=self._reporter,
             clients=self._clients,
         )
         test_result = test_subject.do_one(self._storage_name)
@@ -971,7 +983,7 @@ class TestDoOne:
             test_meta,
             [],
             metadata_reader=self._reader,
-            observable=self._observer,
+            reporter=self._reporter,
             clients=self._clients,
         )
         test_result = test_subject.do_one(self._storage_name)
@@ -991,7 +1003,7 @@ class TestDoOne:
             test_meta,
             [],
             metadata_reader=self._reader,
-            observable=self._observer,
+            reporter=self._reporter,
         )
         test_result = test_subject.do_one(self._storage_name)
         assert test_result is not None, 'expect a result'
@@ -1002,7 +1014,7 @@ class TestDoOne:
         # check that failure/retry files have the correct content if is_rejected returns False, but the
         # number of executors == 0
         try:
-            _ = ec.OrganizeExecutes(test_config, [], [], metadata_reader=self._reader, observable=self._observer)
+            _ = ec.OrganizeExecutes(test_config, [], [], metadata_reader=self._reader, reporter=self._reporter)
         except mc.CadcException as e:
             return
         assert False, 'expect exception'
@@ -1018,7 +1030,7 @@ class TestDoOne:
             test_meta,
             [],
             metadata_reader=self._reader,
-            observable=self._observer,
+            reporter=self._reporter,
             clients=self._clients,
         )
         test_result = test_subject.do_one(self._storage_name)
@@ -1069,6 +1081,7 @@ class TestFhead:
             )
             test_config.change_working_directory(tmpdir)
             os.mkdir(os.path.join(tmpdir, self._test_storage_name.obs_id))
+            test_reporter = mc.ExecutionReporter(test_config, self._test_observable)
             test_subject = ec.NoFheadVisit(
                 test_config,
                 self._clients_mock,
@@ -1076,7 +1089,7 @@ class TestFhead:
                 self._test_meta_visitors,
                 self._test_data_visitors,
                 self._test_metadata_reader,
-                self._test_observable,
+                test_reporter,
             )
             test_subject.execute({'storage_name': self._test_storage_name})
             assert self._clients_mock.data_client.get.called, 'should be called'
@@ -1096,6 +1109,7 @@ class TestFhead:
             test_config.use_local_files = True
             # noop, because use_local_files = True
             test_store_transferrer = transfer_composable.Transfer()
+            test_reporter = mc.ExecutionReporter(test_config, self._test_observable)
             self._test_storage_name = mc.StorageName(
                 obs_id='testz',
                 file_name='testz.hdf5',
@@ -1109,7 +1123,7 @@ class TestFhead:
                 self._test_meta_visitors,
                 self._test_data_visitors,
                 self._test_metadata_reader,
-                self._test_observable,
+                test_reporter,
             )
             test_subject.execute({'storage_name': self._test_storage_name})
             assert not self._clients_mock.data_client.get.called, 'should not be called'
@@ -1130,6 +1144,7 @@ class TestFhead:
             test_config.use_local_files = False
             test_store_transferrer = Mock(autospec=True)
             test_store_transferrer.get.side_effect = _transfer_hdf5_external_mock
+            test_reporter = mc.ExecutionReporter(test_config, self._test_observable)
             self._test_storage_name = mc.StorageName(
                 obs_id='testz',
                 file_name='testz.hdf5',
@@ -1143,7 +1158,7 @@ class TestFhead:
                 self._test_meta_visitors,
                 self._test_data_visitors,
                 self._test_metadata_reader,
-                self._test_observable,
+                test_reporter,
             )
             test_subject.execute({'storage_name': self._test_storage_name})
             assert not self._clients_mock.data_client.get.called, 'should not be called'

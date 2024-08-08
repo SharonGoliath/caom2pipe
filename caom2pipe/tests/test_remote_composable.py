@@ -71,14 +71,15 @@ from os import listdir
 from caom2pipe.manage_composable import make_datetime
 from caom2pipe.remote_composable import ExecutionUnit
 
+from mock import Mock
+
 
 def test_execution_unit_start_stop(test_config, tmp_path):
     kwargs = {
         'clients': None,
         'data_source': None,
         'metadata_reader': None,
-        'observable': None,
-        'reporter': None,
+        'reporter': Mock(),
         'prev_exec_dt': make_datetime('2023-10-28T20:47:49.000000000Z'),
         'exec_dt': make_datetime('2023-11-28T20:47:49.000000000Z'),
     }

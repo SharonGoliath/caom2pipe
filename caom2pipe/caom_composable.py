@@ -1138,14 +1138,13 @@ class TelescopeMapping:
         bp.set('Artifact.metaProducer', self._meta_producer)
         bp.set('Chunk.metaProducer', self._meta_producer)
 
-    def update(self, file_info):
+    def update(self):
         """
         Update the Artifact file-based metadata. Override if it's necessary
         to carry out more/different updates.
 
         :param observation: Observation instance
-        :param file_info: FileInfo instance
-        :return:
+        :return: the same, possibly updated, Observation instance
         """
         self._logger.debug(f'Begin update for {self._observation.observation_id}')
         self._update_groups(self._observation.meta_read_groups, self._meta_read_groups)
@@ -1163,7 +1162,7 @@ class TelescopeMapping:
                         f'{self._storage_name.file_uri}. Continuing.'
                     )
                     continue
-                update_artifact_meta(artifact, file_info)
+                update_artifact_meta(artifact, self._storage_name.file_info)
                 self._update_artifact(artifact)
 
         if isinstance(self._observation, DerivedObservation):
@@ -1209,7 +1208,8 @@ class Fits2caom2Visitor:
         self._storage_name = kwargs.get('storage_name')
         self._metadata_reader = kwargs.get('metadata_reader')
         self._clients = kwargs.get('clients')
-        self._observable = kwargs.get('observable')
+        self._reporter = kwargs.get('reporter')
+        self._observable = self._reporter.observable
         self._config = kwargs.get('config')
         self._logger = logging.getLogger(self.__class__.__name__)
 
@@ -1280,8 +1280,7 @@ class Fits2caom2Visitor:
                     product_id=self._storage_name.product_id,
                 )
 
-                file_info = self._metadata_reader.file_info.get(uri)
-                self._observation = telescope_data.update(file_info)
+                self._observation = telescope_data.update()
         except Caom2Exception as e:
             self._logger.debug(traceback.format_exc())
             self._logger.warning(

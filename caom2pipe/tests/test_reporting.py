@@ -164,7 +164,6 @@ def test_report_output_todo_local(test_config, tmpdir):
                         test_data_sources,
                         test_reader,
                         test_organizer,
-                        test_observable,
                         test_reporter,
                     ) = rc.common_runner_init(
                         config=test_config,
@@ -197,7 +196,6 @@ def test_report_output_todo_local(test_config, tmpdir):
                             test_builder,
                             test_data_sources,
                             test_reader,
-                            test_observable,
                             test_reporter,
                         )
                     else:
@@ -207,7 +205,6 @@ def test_report_output_todo_local(test_config, tmpdir):
                             test_builder,
                             test_data_sources,
                             test_reader,
-                            test_observable,
                             test_reporter,
                         )
 
@@ -306,7 +303,6 @@ def test_report_output_todo_vault(verify_mock, test_config, tmpdir):
                         test_data_sources,
                         test_reader,
                         test_organizer,
-                        test_observable,
                         test_reporter,
                     ) = rc.common_runner_init(
                         config=test_config,
@@ -346,7 +342,6 @@ def test_report_output_todo_vault(verify_mock, test_config, tmpdir):
                             test_builder,
                             test_data_sources,
                             test_reader,
-                            test_observable,
                             test_reporter,
                         )
                     else:
@@ -356,7 +351,6 @@ def test_report_output_todo_vault(verify_mock, test_config, tmpdir):
                             test_builder,
                             test_data_sources,
                             test_reader,
-                            test_observable,
                             test_reporter,
                         )
 

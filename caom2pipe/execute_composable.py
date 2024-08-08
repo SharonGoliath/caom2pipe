@@ -134,7 +134,7 @@ class CaomExecute:
         self,
         config,
         meta_visitors,
-        observable=None,
+        reporter=None,
         metadata_reader=None,
         clients=None,
     ):
@@ -144,7 +144,7 @@ class CaomExecute:
         :param meta_visitors: List of classes with a
             'visit(observation, **kwargs)' method signature. Requires access
             to metadata only.
-        :param observable: things that last longer than a pipeline execution
+        :param reporter: things that last longer than a pipeline execution
         :param metadata_reader: instance of MetadataReader, for retrieving
             metadata, for implementations that visit on metadata only.
         :param clients: instance of ClientCollection, for passing around
@@ -173,7 +173,7 @@ class CaomExecute:
             self.caom_repo_client = clients.metadata_client
         self._clients = clients
         self.meta_visitors = meta_visitors
-        self.observable = observable
+        self._reporter = reporter
         self.log_file_directory = None
         self._data_visitors = []
         self._store_transferrer = None
@@ -216,7 +216,7 @@ class CaomExecute:
             self.caom_repo_client,
             self._storage_name.collection,
             self._storage_name.obs_id,
-            self.observable.metrics,
+            self._reporter.observable.metrics,
         )
         self._caom2_update_needed = (
             False if self._observation is None else True
@@ -233,13 +233,13 @@ class CaomExecute:
             clc.repo_update(
                 self.caom_repo_client,
                 self._observation,
-                self.observable.metrics,
+                self._reporter.observable.metrics,
             )
         else:
             clc.repo_create(
                 self.caom_repo_client,
                 self._observation,
-                self.observable.metrics,
+                self._reporter.observable.metrics,
             )
 
     def _caom2_delete_create(self):
@@ -249,12 +249,12 @@ class CaomExecute:
                 self.caom_repo_client,
                 self._observation.collection,
                 self._observation.observation_id,
-                self.observable.metrics,
+                self._reporter.observable.metrics,
             )
         clc.repo_create(
             self.caom_repo_client,
             self._observation,
-            self.observable.metrics,
+            self._reporter.observable.metrics,
         )
 
     def _cadc_put(self, source_fqn, uri):
@@ -297,7 +297,7 @@ class CaomExecute:
             'storage_name': self._storage_name,
             'log_file_directory': self._config.log_file_directory,
             'clients': self._clients,
-            'observable': self.observable,
+            'reporter': self._reporter,
             'metadata_reader': self._metadata_reader,
             'config': self._config,
         }
@@ -318,7 +318,7 @@ class CaomExecute:
                 'clients': self._clients,
                 'storage_name': self._storage_name,
                 'metadata_reader': self._metadata_reader,
-                'observable': self.observable,
+                'reporter': self._reporter,
             }
             for visitor in self.meta_visitors:
                 try:
@@ -367,14 +367,14 @@ class MetaVisitDeleteCreate(CaomExecute):
         self,
         config,
         meta_visitors,
-        observable,
+        reporter,
         metadata_reader,
         clients,
     ):
         super().__init__(
             config,
             meta_visitors,
-            observable,
+            reporter,
             metadata_reader,
             clients=clients,
         )
@@ -410,14 +410,14 @@ class MetaVisit(CaomExecute):
         self,
         config,
         meta_visitors,
-        observable,
+        reporter,
         metadata_reader,
         clients,
     ):
         super().__init__(
             config,
             meta_visitors=meta_visitors,
-            observable=observable,
+            reporter=reporter,
             metadata_reader=metadata_reader,
             clients=clients,
         )
@@ -453,7 +453,7 @@ class DataVisit(CaomExecute):
         self,
         config,
         data_visitors,
-        observable,
+        reporter,
         transferrer,
         clients,
         metadata_reader,
@@ -461,7 +461,7 @@ class DataVisit(CaomExecute):
         super().__init__(
             config,
             meta_visitors=None,
-            observable=observable,
+            reporter=reporter,
             metadata_reader=metadata_reader,
             clients=clients,
         )
@@ -505,7 +505,7 @@ class LocalDataVisit(DataVisit):
         self,
         config,
         data_visitors,
-        observable,
+        reporter,
         clients,
         metadata_reader,
     ):
@@ -513,7 +513,7 @@ class LocalDataVisit(DataVisit):
             config,
             clients=clients,
             data_visitors=data_visitors,
-            observable=observable,
+            reporter=reporter,
             transferrer=tc.Transfer(),
             metadata_reader=metadata_reader,
         )
@@ -553,7 +553,7 @@ class DataScrape(DataVisit):
             config,
             clients=None,
             data_visitors=data_visitors,
-            observable=None,
+            reporter=None,
             transferrer=tc.Transfer(),
             metadata_reader=metadata_reader,
         )
@@ -586,7 +586,7 @@ class Store(CaomExecute):
     def __init__(
         self,
         config,
-        observable,
+        reporter,
         clients,
         metadata_reader,
         transferrer,
@@ -594,7 +594,7 @@ class Store(CaomExecute):
         super().__init__(
             config,
             meta_visitors=None,
-            observable=observable,
+            reporter=reporter,
             metadata_reader=metadata_reader,
             clients=clients,
         )
@@ -625,14 +625,14 @@ class NoFheadVisit(CaomExecute):
         meta_visitors,
         data_visitors,
         metadata_reader,
-        observable,
+        reporter,
     ):
         super().__init__(
             config=config,
             clients=clients,
             meta_visitors=meta_visitors,
             metadata_reader=metadata_reader,
-            observable=observable,
+            reporter=reporter,
         )
         self._modify_transferrer = modify_transferrer
         self._data_visitors = data_visitors
@@ -683,14 +683,14 @@ class NoFheadStoreVisit(CaomExecute):
         meta_visitors,
         data_visitors,
         metadata_reader,
-        observable,
+        reporter,
     ):
         super().__init__(
             config=config,
             clients=clients,
             meta_visitors=meta_visitors,
             metadata_reader=metadata_reader,
-            observable=observable,
+            reporter=reporter,
         )
         self._store_transferrer = store_transferrer
         self._data_visitors = data_visitors
@@ -703,6 +703,7 @@ class NoFheadStoreVisit(CaomExecute):
         self._store_data()
 
         self._logger.debug('initialize the metadata')
+        # the file has to be staged locally for the set call to work
         self._metadata_reader.working_directory = self._working_dir
         self._metadata_reader.set(self._storage_name)
 
@@ -752,13 +753,13 @@ class NoFheadScrape(CaomExecute):
     on disk for metadata and data operations without internet access. The file is located on disk.
     No record is written to a web service."""
 
-    def __init__(self, config, meta_visitors, data_visitors, metadata_reader, observable):
+    def __init__(self, config, meta_visitors, data_visitors, metadata_reader, reporter):
         super().__init__(
             config,
             meta_visitors=meta_visitors,
             metadata_reader=metadata_reader,
             clients=None,
-            observable=observable,
+            reporter=reporter,
         )
         self._data_visitors = data_visitors
 
@@ -812,7 +813,7 @@ class OrganizeExecutes:
         modify_transfer=None,
         metadata_reader=None,
         clients=None,
-        observable=None,
+        reporter=None,
     ):
         """
         Why there is support for two transfer instances:
@@ -835,7 +836,7 @@ class OrganizeExecutes:
         self.config = config
         self.chooser = chooser
         self.task_types = config.task_types
-        self._observable = observable
+        self._reporter = reporter
         self._meta_visitors = meta_visitors
         self._data_visitors = data_visitors
         self._modify_transfer = modify_transfer
@@ -875,14 +876,10 @@ class OrganizeExecutes:
         mc.create_dir(working_dir)
 
     def is_rejected(self, storage_name):
-        """Common code to use the appropriate identifier when checking for
-        rejected entries."""
-        result = self._observable.rejected.is_bad_metadata(storage_name.file_name)
+        """Common code to use the appropriate identifier when checking for rejected entries."""
+        result = self._reporter.observable.rejected.is_bad_metadata(storage_name.file_name)
         if result:
-            self._logger.info(
-                f'Rejected observation {storage_name.file_name} because of '
-                f'bad metadata'
-            )
+            self._logger.info(f'Rejected observation {storage_name.file_name} because of bad metadata')
         return result
 
     def _set_up_file_logging(self, storage_name):
@@ -944,7 +941,7 @@ class OrganizeExecutes:
                         self._meta_visitors,
                         self._data_visitors,
                         self._metadata_reader,
-                        self._observable,
+                        self._reporter,
                     )
                 )
             elif mc.TaskType.STORE in self.task_types:
@@ -957,7 +954,7 @@ class OrganizeExecutes:
                         self._meta_visitors,
                         self._data_visitors,
                         self._metadata_reader,
-                        self._observable,
+                        self._reporter,
                     )
                 )
             else:
@@ -970,7 +967,7 @@ class OrganizeExecutes:
                         self._meta_visitors,
                         self._data_visitors,
                         self._metadata_reader,
-                        self._observable,
+                        self._reporter,
                     )
                 )
         else:
@@ -990,7 +987,7 @@ class OrganizeExecutes:
                 elif task_type == mc.TaskType.STORE:
                     self._logger.debug(f'Choosing executor Store for {task_type}.')
                     self._executors.append(
-                        Store(self.config, self._observable, self._clients, self._metadata_reader, self._store_transfer)
+                        Store(self.config, self._reporter, self._clients, self._metadata_reader, self._store_transfer)
                     )
                 elif task_type == mc.TaskType.INGEST:
                     if self.chooser is not None and self.chooser.needs_delete():
@@ -1000,7 +997,7 @@ class OrganizeExecutes:
                         )
                         self._executors.append(
                             MetaVisitDeleteCreate(
-                                self.config, self._meta_visitors, self._observable, self._metadata_reader, self._clients
+                                self.config, self._meta_visitors, self._reporter, self._metadata_reader, self._clients
                             )
                         )
                     else:
@@ -1009,7 +1006,7 @@ class OrganizeExecutes:
                         )
                         self._executors.append(
                             MetaVisit(
-                                self.config, self._meta_visitors, self._observable, self._metadata_reader, self._clients
+                                self.config, self._meta_visitors, self._reporter, self._metadata_reader, self._clients
                             )
                         )
                 elif task_type == mc.TaskType.MODIFY:
@@ -1029,7 +1026,7 @@ class OrganizeExecutes:
                                 LocalDataVisit(
                                     self.config,
                                     self._data_visitors,
-                                    self._observable,
+                                    self._reporter,
                                     self._clients,
                                     self._metadata_reader,
                                 )
@@ -1042,7 +1039,7 @@ class OrganizeExecutes:
                             DataVisit(
                                 self.config,
                                 self._data_visitors,
-                                self._observable,
+                                self._reporter,
                                 self._modify_transfer,
                                 self._clients,
                                 self._metadata_reader,
@@ -1054,7 +1051,7 @@ class OrganizeExecutes:
                     )
                     self._executors.append(
                         MetaVisit(
-                            self.config, self._meta_visitors, self._observable, self._metadata_reader, self._clients
+                            self.config, self._meta_visitors, self._reporter, self._metadata_reader, self._clients
                         )
                     )
                 elif task_type == mc.TaskType.DEFAULT:

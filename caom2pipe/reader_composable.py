@@ -362,8 +362,10 @@ class DelayedClientReader(StorageClientReader):
 
 
 class RemoteRcloneMetadataReader(FileMetadataReader):
-    def __init__(self):
+    """This implementation has all the metadata from an rclone lsjson query output."""
+    def __init__(self, builder):
         super().__init__()
+        self._builder = builder
         self._storage_names = {}
         self._max_dt = None
 
@@ -396,65 +398,50 @@ class RemoteRcloneMetadataReader(FileMetadataReader):
         """
         :param storage_name str JSON output from rclone lsjson command
         """
-        self._logger.debug('Begin set_file_info with rclone lsjson output')
+        self._logger.debug('Begin seed with "rclone lsjson" output')
         content = json.loads(with_content)
         for entry in content:
             name = entry.get('Name')
             if '.fits' in name:
                 # keys are destination URIs
                 try:
-                    destination_uri = mc.build_uri(scheme=mc.StorageName.scheme, archive=mc.StorageName.collection, file_name=name)
+                    storage_name = self._builder.build(name)
                 except mc.CadcException as e:
                     self._logger.error(e)
                     self._logger.debug(traceback.format_exc())
                     continue
-                if destination_uri not in self._file_info:
-                    self._logger.debug(f'Retrieve FileInfo for {destination_uri}')
-                    self._file_info[destination_uri] = FileInfo(
-                        id=destination_uri,
+                if storage_name.file_uri not in self._file_info:
+                    self._logger.debug(f'Retrieve FileInfo for {storage_name.file_uri}')
+                    self._file_info[storage_name.file_uri] = FileInfo(
+                        id=storage_name.file_uri,
                         file_type=data_util.get_file_type(name),
                         size=entry.get('Size'),
                         lastmod=mc.make_datetime(entry.get('ModTime')),
                     )
                     if self._max_dt:
-                        self._max_dt = max(self._file_info[destination_uri].lastmod, self._max_dt)
+                        self._max_dt = max(self._file_info[storage_name.file_uri].lastmod, self._max_dt)
                     else:
-                        self._max_dt = self._file_info[destination_uri].lastmod
-                    # self._storage_names[possum_name.file_uri] = possum_name
-        self._logger.debug(f'End set_file_info with max datetime {self._max_dt}')
-
-    # def set(self, storage_name):
-    #     raise NotImplementedError
+                        self._max_dt = self._file_info[storage_name.file_uri].lastmod
+                    storage_name.file_info = self._file_info.get(storage_name.file_uri)
+                    self._storage_names[storage_name.file_uri] = storage_name
+        self._logger.debug(f'End seed with max datetime {self._max_dt}')
 
     def set_headers(self, storage_name, fqn):
         self._logger.debug(f'Begin set_headers for {storage_name.file_name}')
         for entry in storage_name.destination_uris:
             if entry not in self._headers and os.path.basename(entry) == os.path.basename(fqn):
-                self._logger.debug(f'Retrieve headers for {entry}')
                 self._retrieve_headers(entry, fqn)
                 storage_name.metadata = self._headers.get(entry)
-        if storage_name.file_uri not in self._storage_names:
-            self._storage_names[storage_name.file_uri] = storage_name
+                storage_name.set_staging_name(os.path.basename(fqn))
+            if entry not in self._storage_names:
+                self._storage_names[entry] = storage_name
         self._logger.debug('End set_headers')
 
-
-class TodoRcloneMetadataReader(FileMetadataReader):
-    """This implementation uses the output from an rclone lsjson execution to track FileInfo. This class also handles
-    a rename option (stage_names reference)."""
-    def __init__(self, remote_metadata_reader):
-        super().__init__()
-        self._remote_metadata_reader = remote_metadata_reader
-
-    def _retrieve_file_info(self, key, source_name):
-        for storage_name in self._remote_metadata_reader.storage_names.values():
-            for file_name in storage_name.stage_names:
-                if key.endswith(file_name):
-                    # the stage_names are the renamed values
-                    self._logger.debug(f'Found remote FileInfo entry for {file_name} in {storage_name.file_uri}')
-                    self._file_info[key] = self._remote_metadata_reader.file_info.get(storage_name.file_uri)
-                    # missing md5sum - TODO - maybe rclone can report this
-                    md5_sum = mc.compute_md5sum(source_name)
-                    self._file_info[key].md5sum = f'md5:{md5_sum}'
+    def unset(self, storage_name):
+        super().unset(storage_name)
+        for entry in storage_name.destination_uris:
+            if entry in self._storage_names:
+                del self._storage_names[entry]
 
 
 class VaultReader(MetadataReader):

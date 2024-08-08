@@ -76,7 +76,6 @@ from copy import deepcopy
 from caom2pipe.data_source_composable import RemoteListDirDataSource
 from caom2pipe.execute_composable import OrganizeExecutes
 from caom2pipe.manage_composable import create_dir, make_datetime, TaskType
-from caom2pipe.reader_composable import TodoRcloneMetadataReader
 from caom2pipe.run_composable import TodoRunner
 from caom2pipe.transfer_composable import CadcTransfer, Transfer
 
@@ -106,15 +105,15 @@ class ExecutionUnit:
         self._config = config
         self._entry_dt = None
         self._clients = kwargs.get('clients')
-        # self._data_source = kwargs.get('data_source')
         self._remote_metadata_reader = kwargs.get('metadata_reader')
-        self._observable = kwargs.get('observable')
         self._reporter = kwargs.get('reporter')
+        self._observable = self._reporter.observable
         self._prev_exec_dt = kwargs.get('prev_exec_dt')
         self._exec_dt = kwargs.get('exec_dt')
         self._builder = kwargs.get('builder')
         self._meta_visitors = kwargs.get('meta_visitors')
         self._data_visitors = kwargs.get('data_visitors')
+        self._local_metadata_reader = kwargs.get('staged_metadata_reader')
         self._label = (
             f'{self._prev_exec_dt.isoformat().replace(":", "_").replace(".", "_")}_'
             f'{self._exec_dt.isoformat().replace(":", "_").replace(".", "_")}'
@@ -129,7 +128,6 @@ class ExecutionUnit:
         self._num_entries = None
         self._central_wavelengths = {}  # key is original ObservationID, value is central wavelength
         self._observations = {}  # key is original ObservationID, values are Observation instances
-        self._local_metadata_reader = None
         self._logger = logging.getLogger(self.__class__.__name__)
 
     @property
@@ -160,7 +158,7 @@ class ExecutionUnit:
         """Make the execution unit one time-boxed copy from the DataSource to staging space, followed by a TodoRunner
         pointed to the staging space, and using that staging space with use_local_files: True. """
         self._logger.info(f'Begin do for {self._num_entries} entries in {self._label}')
-        self._rename()
+        self._prepare()
         result = None
         # set a Config instance to use the staging space with 'use_local_files: True'
         todo_config = deepcopy(self._config)
@@ -168,7 +166,6 @@ class ExecutionUnit:
         todo_config.data_sources = [self._working_directory]
         todo_config.recurse_data_sources = True
         self._logger.debug(f'do config for TodoRunner: {todo_config}')
-        self._local_metadata_reader = TodoRcloneMetadataReader(self._remote_metadata_reader)
         organizer = OrganizeExecutes(
             todo_config,
             self._meta_visitors,
@@ -178,7 +175,7 @@ class ExecutionUnit:
             CadcTransfer(self._clients.data_client),
             self._local_metadata_reader,
             self._clients,
-            self._observable,
+            self._reporter,
         )
         local_data_source = RemoteListDirDataSource(todo_config)
         local_data_source.reporter = self._reporter
@@ -189,7 +186,6 @@ class ExecutionUnit:
             builder=self._builder,
             data_sources=[local_data_source],
             metadata_reader=self._local_metadata_reader,
-            observable=self._observable,
             reporter=self._reporter,
         )
         result = todo_runner.run()
@@ -221,7 +217,6 @@ class ExecutionUnit:
         """Remove a directory and all its contents. Only do this if there is not a 'SCRAPE' task type, since the
         point of scraping is to be able to look at the pipeline execution artefacts once the processing is done.
         """
-        # if os.path.exists(self._working_directory) and TaskType.SCRAPE not in self._task_types and self._config.cleanup_files_when_storing:
         if os.path.exists(self._working_directory) and TaskType.SCRAPE not in self._task_types:
             entries = glob.glob('*', root_dir=self._working_directory, recursive=True)
             if (self._config.cleanup_files_when_storing and len(entries) > 0) or len(entries) == 0:
@@ -229,8 +224,18 @@ class ExecutionUnit:
                 self._logger.error(f'Removed working directory {self._working_directory} and contents.')
         self._logger.debug('End _clean_up_workspace')
 
-    def _rename(self):
-        raise NotImplementedError
+    def _prepare(self):
+        self._logger.debug('Begin _prepare')
+        work = glob.glob('**/*.fits', root_dir=self._working_directory, recursive=True)
+        for file_name in work:
+            self._logger.info(f'Working on {file_name}')
+            for storage_name in self._remote_metadata_reader._storage_names.values():
+                if storage_name.file_name == os.path.basename(file_name):
+                    original_fqn = os.path.join(self._working_directory, file_name)
+                    self._remote_metadata_reader.set_headers(storage_name, original_fqn)
+                    break
+
+        self._logger.debug('End _prepare')
 
     def _set_up_file_logging(self):
         """Configure logging to a separate file for each execution unit.

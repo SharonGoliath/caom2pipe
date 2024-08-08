@@ -1161,7 +1161,7 @@ class TestProcessEntry:
             test_meta,
             [],
             metadata_reader=self._reader,
-            observable=self._observer,
+            reporter=self._reporter,
             clients=self._clients,
         )
         self._storage_name = tc.TStorageName()
@@ -1177,7 +1177,6 @@ class TestProcessEntry:
             test_builder,
             self._data_source,
             self._reader,
-            self._observer,
             self._reporter,
         )
         test_result = test_subject._process_entry(self._data_source, self._storage_name.file_name, current_count=0)
@@ -1200,7 +1199,6 @@ class TestProcessEntry:
             test_builder,
             self._data_source,
             self._reader,
-            self._observer,
             self._reporter,
         )
         test_result = test_subject._process_entry(self._data_source, self._storage_name.file_name, current_count=0)
@@ -1224,7 +1222,6 @@ class TestProcessEntry:
                 test_builder,
                 self._data_source,
                 self._reader,
-                self._observer,
                 self._reporter,
             )
             test_result = test_subject._process_entry(self._data_source, self._storage_name.file_name, current_count=0)
@@ -1248,7 +1245,6 @@ class TestProcessEntry:
                 test_builder,
                 self._data_source,
                 self._reader,
-                self._observer,
                 self._reporter,
             )
             test_result = test_subject._process_entry(self._data_source, self._storage_name.file_name, current_count=0)
@@ -1272,7 +1268,6 @@ class TestProcessEntry:
                 test_builder,
                 self._data_source,
                 self._reader,
-                self._observer,
                 self._reporter,
             )
             test_result = test_subject._process_entry(self._data_source, self._storage_name.file_name, current_count=0)
@@ -1352,7 +1347,7 @@ class TestRetry:
                 meta_visitors=test_meta,
                 data_visitors=test_data,
                 metadata_reader=self._reader,
-                observable=self._observer,
+                reporter=self._reporter,
                 clients=self._clients,
                 store_transfer=self._store_transfer,
                 modify_transfer=self._modify_transfer,
@@ -1363,7 +1358,6 @@ class TestRetry:
                 self._name_builder,
                 test_sources,
                 self._reader,
-                self._observer,
                 self._reporter,
             )
         finally:
@@ -1673,13 +1667,7 @@ def test_state_runner_reporter(test_config, tmp_path, change_test_dir):
     test_data_sources = [test_data_source]
     test_observable = Mock()
     test_reporter = mc.ExecutionReporter(test_config, test_observable)
-    test_subject = rc.ExecutionUnitStateRunner(
-        test_config,
-        test_organizer,
-        test_data_sources,
-        test_observable,
-        test_reporter,
-    )
+    test_subject = rc.ExecutionUnitStateRunner(test_config, test_organizer, test_data_sources, test_reporter)
     test_result = test_subject.run()
     assert test_result is not None, 'expect a result'
     assert test_result == 0, 'happy path'

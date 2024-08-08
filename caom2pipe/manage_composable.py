@@ -455,6 +455,10 @@ class ExecutionReporter:
         return self._summary.entries
 
     @property
+    def observable(self):
+        return self._observable
+
+    @property
     def success(self):
         return self._summary.success
 
@@ -2125,8 +2129,6 @@ class StorageName:
         # list of str - the Artifact URIs as represented at CADC. Sufficient
         # for storing/retrieving to/from CADC.
         self._destination_uris = []
-        # if the original file names need to be renamed for some reason
-        self._stage_names = []
         # str - the file name with all file type and compression extensions removed
         self._file_id = None
         self._metadata = None
@@ -2142,11 +2144,13 @@ class StorageName:
         return (
             f'\n'
             f'          obs_id: {self.obs_id}\n'
-            f'       file_name: {self.file_name}\n'
-            f'        file_uri: {self.file_uri}\n'
             f'      product_id: {self.product_id}\n'
+            f'        file_uri: {self.file_uri}\n'
+            f'       file_name: {self.file_name}\n'
             f'    source_names: {self.source_names}\n'
-            f'destination_uris: {self.destination_uris}'
+            f'destination_uris: {self.destination_uris}\n'
+            f'       file_info: {self.file_info}\n'
+            f'   len(metadata): {str(len(self.metadata)) if self.metadata else "0"}'
         )
 
     def _get_uri(self, file_name, scheme):
@@ -2249,10 +2253,6 @@ class StorageName:
         self.set_destination_uris()
 
     @property
-    def stage_names(self):
-        return self._stage_names
-
-    @property
     def is_feasible(self):
         """
         To support the exclusion of CFHT HDF5 files in the pipeline.
@@ -2295,9 +2295,6 @@ class StorageName:
     def set_product_id(self, **kwargs):
         if self._product_id is None:
             self._product_id = self._file_id
-
-    def set_staging_name(self, value):
-        self._stage_names.append(value)
 
     @staticmethod
     def remove_extensions(name):
