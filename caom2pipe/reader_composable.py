@@ -432,7 +432,6 @@ class RemoteRcloneMetadataReader(FileMetadataReader):
             if entry not in self._headers and os.path.basename(entry) == os.path.basename(fqn):
                 self._retrieve_headers(entry, fqn)
                 storage_name.metadata = self._headers.get(entry)
-                storage_name.set_staging_name(os.path.basename(fqn))
             if entry not in self._storage_names:
                 self._storage_names[entry] = storage_name
         self._logger.debug('End set_headers')
