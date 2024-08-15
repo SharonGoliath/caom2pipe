@@ -309,12 +309,14 @@ class State:
         write_as_yaml(self.content, state_fqn)
 
     @staticmethod
-    def write_bookmark(state_fqn, book_mark, time_dt):
+    def write_bookmark(state_fqn, book_mark, time_dt, end_timestamp=None):
         bookmark = {
             'bookmarks': {
                 f'{book_mark}': {'last_record': time_dt},
             }
         }
+        if end_timestamp:
+            bookmark['bookmarks'][book_mark]['end_timestamp'] = end_timestamp
         write_as_yaml(bookmark, state_fqn)
 
 
@@ -2106,6 +2108,7 @@ class StorageName:
     # scheme for Storage Inventory
     scheme = 'cadc'
     preview_scheme = 'cadc'
+    data_source_extensions = ['.fits']
 
     def __init__(
         self,
