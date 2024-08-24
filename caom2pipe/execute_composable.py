@@ -424,14 +424,14 @@ class CaomExecuteContext(CaomExecute):
             kwargs = {
                 'config': self._config,
                 'clients': self._clients,
-                'strategy': self._strategy,
+                'hierarchy': self._strategy,
                 'observable': self._observable,
             }
             for visitor in self._meta_visitors:
                 try:
                     self._observation = visitor.visit(self._observation, **kwargs)
                     if self._observation is None:
-                        msg = f'No Observation for {self._storage_name.file_uri}. Construction failed.'
+                        msg = f'No Observation for {self._strategy.file_uri}. Construction failed.'
                         self._logger.error(f'Stopping _visit_meta with {msg}')
                         raise mc.CadcException(msg)
                 except Exception as e:

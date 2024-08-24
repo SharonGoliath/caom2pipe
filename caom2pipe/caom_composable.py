@@ -1238,7 +1238,6 @@ class TelescopeMapping2:
         """
         Update the Artifact file-based metadata. Override if it's necessary to carry out more/different updates.
 
-        :param file_info: FileInfo instance
         :return: Observation self._observation instance
         """
         self._logger.debug(f'Begin update for {self._observation.observation_id}')
