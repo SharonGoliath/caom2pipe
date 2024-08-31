@@ -579,6 +579,68 @@ class MetaVisitExpander(CaomExecuteContext):
         self._logger.debug('End execute')
 
 
+class MetaVisitHierarchies(CaomExecuteContext):
+
+    def __init__(self, clients, config, meta_visitors, observable):
+        super().__init__(clients=clients, config=config, meta_visitors=meta_visitors, observable=observable)
+        self._first_hierarchy = None
+        self._hierarchies = None
+
+    def _caom2_read(self):
+        """Retrieve the existing observation model metadata."""
+        self._observation = clc.repo_get(
+            self._clients.metadata_client, self._config.collection, self._first_hierarchy.obs_id, self._observable.metrics
+        )
+        self._caom2_update_needed = False if self._observation is None else True
+        if self._caom2_update_needed:
+            self._logger.debug(f'Found observation {self._observation.observation_id}')
+
+    def _visit_meta(self):
+        """Execute metadata-only visitors on an Observation in
+        memory."""
+        if self._meta_visitors:
+            kwargs = {
+                'config': self._config,
+                'clients': self._clients,
+                'hierarchies': self._hierarchies,
+                'observable': self._observable,
+            }
+            for visitor in self._meta_visitors:
+                self._logger.error(visitor.visit)
+                try:
+                    self._observation = visitor.visit(self._observation, **kwargs)
+                    if self._observation is None:
+                        msg = f'No Observation for {self._strategy.file_uri}. Construction failed.'
+                        self._logger.error(f'Stopping _visit_meta with {msg}')
+                        raise mc.CadcException(msg)
+                except Exception as e:
+                    raise mc.CadcException(e)
+
+    def execute(self, context):
+        self._hierarchies = context.get('hierarchies')
+        self._first_hierarchy = next(iter(self._hierarchies.values()))
+
+        if self._config.log_to_file:
+            self._model_fqn = os.path.join(self._config.log_file_directory, f'{self._first_hierarchy.obs_id}.xml')
+        else:
+            self._model_fqn = os.path.join(self._first_hierarchy.working_directory, f'{self._first_hierarchy.obs_id}.xml')
+        self._decompressor = context_decompressor_factory(self._config, self.log_level_as, self._first_hierarchy)
+
+        self._logger.debug('retrieve the observation if it exists')
+        self._caom2_read()
+
+        self._logger.debug('go through meta visitors')
+        self._visit_meta()
+
+        self._logger.debug('write the updated xml to disk for debugging')
+        self._write_model()
+
+        self._logger.debug('store the xml')
+        self._caom2_store()
+
+        self._logger.debug('End execute')
+
+
 class DataVisit(CaomExecute):
     """Defines the pipeline step for all the operations that
     require access to the file on disk. The data must be retrieved
@@ -1499,6 +1561,120 @@ class OrganizeWithContext(OrganizeExecutes):
                     else:
                         result = -1
                         result_message = 'Invalid name format'
+                # keep failed hierarchy information for retries
+                self._strategy_context.unset(unset_keys)
+            except Exception as e:
+                result_message = f'{entry} failed execute with {e}'
+                self._logger.warning(result_message)
+                self._logger.error(traceback.format_exc())
+                result = -1
+            finally:
+                self._strategy_context.clean_up_workspace()
+                self._strategy_context.unset_file_logging()
+        else:
+            self._logger.info(f'No executors for {entry}')
+            result = -1
+            result_message = 'No executors'
+        self._logger.debug(f'End do_one with result {result}, message {result_message}')
+        return result, result_message
+
+
+class OrganizeWithHierarchy(OrganizeWithContext):
+
+    def __init__(self, config, strategy_context, clients, observable):
+        super().__init__(
+            config,
+            clients=clients,
+            observable=observable,
+            strategy_context=strategy_context,
+        )
+
+    def choose(self, meta_visitors, data_visitors):
+        """The logic that decides which descendants of CaomExecute to instantiate. This is based on the content of
+        the config.yml file for an application.
+        """
+        if self.can_use_single_visit():
+            if mc.TaskType.SCRAPE in self.task_types:
+                self._logger.debug(f'Choosing executor NoFheadSScrape for tasks {self.task_types}.')
+                raise NotImplementedError
+            elif mc.TaskType.STORE in self.task_types:
+                self._logger.debug(f'Choosing executor NoFheadStoreVisit for tasks {self.task_types}.')
+                raise NotImplementedError
+            else:
+                self._logger.debug(f'Choosing executor NoFheadVisit for tasks {self.task_types}.')
+                raise NotImplementedError
+        else:
+            for task_type in self.task_types:
+                if task_type == mc.TaskType.SCRAPE:
+                    if self._config.use_local_files:
+                        self._logger.debug(f'Choosing executor Scrape for {task_type}.')
+                        raise NotImplementedError
+                    else:
+                        raise mc.CadcException('use_local_files must be True with Task Type "SCRAPE"')
+                elif task_type == mc.TaskType.STORE:
+                    self._logger.debug(f'Choosing executor Store for {task_type}.')
+                    raise NotImplementedError
+                elif task_type == mc.TaskType.INGEST:
+                    self._logger.debug(f'Choosing executor MetaVisit for {task_type}.')
+                    self._executors.append(
+                        MetaVisitHierarchies(self._clients, self._config, meta_visitors, self._observable)
+                    )
+                elif task_type == mc.TaskType.MODIFY:
+                    if self._config.use_local_files:
+                        if len(self._executors) > 0 and isinstance(self._executors[0], Scrape):
+                            self._logger.debug(f'Choosing executor DataScrape for {task_type}.')
+                            raise NotImplementedError
+                        else:
+                            self._logger.debug(f'Choosing executor LocalDataVisit for {task_type}.')
+                            raise NotImplementedError
+                    else:
+                        self._logger.debug(f'Choosing executor DataVisit for {task_type}.')
+                        raise NotImplementedError
+                elif task_type == mc.TaskType.VISIT:
+                    self._logger.debug(f'Choosing executor MetaVisit for {task_type}.')
+                    raise NotImplementedError
+                elif task_type == mc.TaskType.DEFAULT:
+                    pass
+                else:
+                    raise mc.CadcException(f'Do not understand task type {task_type}')
+
+    def do_one(self, entry):
+        """Process one entry.
+        :param entry a string that can be used at a DataSource to identify work to be done
+        """
+        self._logger.debug(f'Begin do_one {entry}')
+        result = 0
+        result_message = None
+        if len(self._executors) > 0:
+            try:
+                # TODO - evaluate where the cardinality handling should be
+                # shoud the for loop be here, or in the CaomExecutes specializations?
+                # well, probably here, because here it only has to happen once - does that make
+                # anything more expensive than it should be?
+                hierarchies = self._strategy_context.expand(entry)
+                self._logger.debug(f'Found {len(hierarchies)} entries for {entry}.')
+                # keep a list of the successes to remove from memory, otherwise the metadata may still be
+                # required for retries
+                unset_keys = []
+                # for hierarchy in hierarchies.values():
+                #     if hierarchy.is_valid():
+                #         if self.is_rejected(hierarchy):
+                #             self._reporter.capture_failure(hierarchy, BaseException('StorageName.is_rejected'), 'Rejected')
+                #             # successful rejection of the execution case
+                #             result = 0
+                #         else:
+                #             context = {'hierarchy': hierarchy}
+                #             for executor in self._executors:
+                #                 self._logger.info(f'Task with {executor.__class__.__name__} for {hierarchy.obs_id}')
+                #                 executor.execute(context)
+                #             unset_keys.append(hierarchy.file_uri)
+                #     else:
+                #         result = -1
+                #         result_message = 'Invalid name format'
+                for executor in self._executors:
+                    self._logger.info(f'Task with {executor.__class__.__name__} for {len(hierarchies)} hierarchies.')
+                    context = {'hierarchies': hierarchies}
+                    executor.execute(context)
                 # keep failed hierarchy information for retries
                 self._strategy_context.unset(unset_keys)
             except Exception as e:

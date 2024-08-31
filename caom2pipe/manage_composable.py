@@ -2548,7 +2548,8 @@ def exec_cmd_info(cmd):
     :return The text from stdout.
     """
     logging.debug(cmd)
-    cmd_array = cmd.split()
+    # cmd_array = cmd.split()
+    cmd_array = ['/bin/bash', '-c', cmd]
     try:
         output, outerr = subprocess.Popen(
             cmd_array, stdout=subprocess.PIPE, stderr=subprocess.PIPE
