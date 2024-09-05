@@ -2486,7 +2486,7 @@ def exec_cmd(cmd, log_level_as=logging.debug, timeout=None):
     :return None
     """
     logging.debug(cmd)
-    cmd_array = cmd.split()
+    cmd_array = ['/bin/bash', '-c', cmd]
     exec_cmd_array(cmd_array, log_level_as, timeout)
 
 
