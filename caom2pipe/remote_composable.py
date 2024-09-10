@@ -73,9 +73,10 @@ import shutil
 
 from copy import deepcopy
 
-from caom2pipe.data_source_composable import RemoteListDirDataSource
+from caom2pipe.data_source_composable import ListDirSeparateDataSource
 from caom2pipe.execute_composable import OrganizeExecutes
 from caom2pipe.manage_composable import create_dir, make_datetime, TaskType
+from caom2pipe.reader_composable import FromRemoteFileMetadataReader
 from caom2pipe.run_composable import TodoRunner
 from caom2pipe.transfer_composable import CadcTransfer, Transfer
 
@@ -83,7 +84,7 @@ from caom2pipe.transfer_composable import CadcTransfer, Transfer
 __all__ = ['ExecutionUnit', 'ExecutionUnitOrganizeExecutes']
 
 
-class ExecutionUnit:
+class ExecutionUnitNoReader:
     """
     Could be:
     - 1 file
@@ -93,11 +94,12 @@ class ExecutionUnit:
     Temporal Cohesion between logging setup/teardown and workspace setup/teardown.
     """
 
-    def __init__(self, config, **kwargs):
+    def __init__(self, config, prev_exec_time, exec_time, **kwargs):
         """
         :param root_directory str staging space location
         :param label str name of the execution unit. Should be unique and conform to posix directory naming standards.
         """
+        self._local_data_source = None
         self._log_fqn = None
         self._logging_level = None
         self._log_handler = None
@@ -105,18 +107,14 @@ class ExecutionUnit:
         self._config = config
         self._entry_dt = None
         self._clients = kwargs.get('clients')
-        self._remote_metadata_reader = kwargs.get('metadata_reader')
         self._reporter = kwargs.get('reporter')
         self._observable = self._reporter.observable
-        self._prev_exec_dt = kwargs.get('prev_exec_dt')
-        self._exec_dt = kwargs.get('exec_dt')
         self._builder = kwargs.get('builder')
         self._meta_visitors = kwargs.get('meta_visitors')
         self._data_visitors = kwargs.get('data_visitors')
-        self._local_metadata_reader = kwargs.get('staged_metadata_reader')
         self._label = (
-            f'{self._prev_exec_dt.isoformat().replace(":", "_").replace(".", "_")}_'
-            f'{self._exec_dt.isoformat().replace(":", "_").replace(".", "_")}'
+            f'{prev_exec_time.isoformat().replace(":", "_").replace(".", "_")}_'
+            f'{exec_time.isoformat().replace(":", "_").replace(".", "_")}'
         )
         self._working_directory = os.path.join(config.working_directory, self._label)
         if config.log_to_file:
@@ -126,7 +124,7 @@ class ExecutionUnit:
                 self._log_fqn = os.path.join(config.working_directory, self._label)
             self._logging_level = config.logging_level
         self._num_entries = None
-        self._central_wavelengths = {}  # key is original ObservationID, value is central wavelength
+        self._save_time = exec_time
         self._observations = {}  # key is original ObservationID, values are Observation instances
         self._logger = logging.getLogger(self.__class__.__name__)
 
@@ -146,9 +144,9 @@ class ExecutionUnit:
     def num_entries(self):
         return self._num_entries
 
-    @num_entries.setter
-    def num_entries(self, value):
-        self._num_entries = value
+    @property
+    def save_time(self):
+        return self._save_time
 
     @property
     def working_directory(self):
@@ -157,7 +155,7 @@ class ExecutionUnit:
     def do(self):
         """Make the execution unit one time-boxed copy from the DataSource to staging space, followed by a TodoRunner
         pointed to the staging space, and using that staging space with use_local_files: True. """
-        self._logger.info(f'Begin do for {self._num_entries} entries in {self._label}')
+        self._logger.info(f'Begin do in {self._label}')
         self._prepare()
         result = None
         # set a Config instance to use the staging space with 'use_local_files: True'
@@ -166,6 +164,7 @@ class ExecutionUnit:
         todo_config.data_sources = [self._working_directory]
         todo_config.recurse_data_sources = True
         self._logger.debug(f'do config for TodoRunner: {todo_config}')
+        local_metadata_reader = FromRemoteFileMetadataReader()
         organizer = OrganizeExecutes(
             todo_config,
             self._meta_visitors,
@@ -173,31 +172,31 @@ class ExecutionUnit:
             None,  # chooser
             Transfer(),
             CadcTransfer(self._clients.data_client),
-            self._local_metadata_reader,
+            local_metadata_reader,
             self._clients,
             self._reporter,
         )
-        local_data_source = RemoteListDirDataSource(todo_config)
-        local_data_source.reporter = self._reporter
+        self._local_data_source = ListDirSeparateDataSource(todo_config)
+        self._local_data_source.reporter = self._reporter
         # start a TodoRunner with the new Config instance, data_source, and metadata_reader
         todo_runner = TodoRunner(
             todo_config,
             organizer,
             builder=self._builder,
-            data_sources=[local_data_source],
-            metadata_reader=self._local_metadata_reader,
+            data_sources=[self._local_data_source],
+            metadata_reader=local_metadata_reader,
             reporter=self._reporter,
         )
         result = todo_runner.run()
         if todo_config.cleanup_files_when_storing:
             result |= todo_runner.run_retry()
 
-        if local_data_source.num_entries != self._num_entries:
-            self._logger.error(
-                f'Expected to process {self._num_entries} entries, but found {local_data_source.num_entries} entries.'
-            )
-            result = -1
-        self._logger.debug(f'End do with result {result}')
+        self._num_entries = self._local_data_source._num_entries
+        if local_metadata_reader.max_dt:
+            self._save_time = min(self._save_time, local_metadata_reader.max_dt)
+            self._logger.debug(f'End do with result {result}. Last processed file has timestamp {self._entry_dt}')
+        else:
+            self._logger.debug(f'End do with result {result}. No files processed.')
         return result
 
     def start(self):
@@ -221,20 +220,10 @@ class ExecutionUnit:
             entries = glob.glob('*', root_dir=self._working_directory, recursive=True)
             if (self._config.cleanup_files_when_storing and len(entries) > 0) or len(entries) == 0:
                 shutil.rmtree(self._working_directory)
-                self._logger.error(f'Removed working directory {self._working_directory} and contents.')
+                self._logger.warning(f'Removed working directory {self._working_directory} and contents.')
         self._logger.debug('End _clean_up_workspace')
 
     def _prepare(self):
-        self._logger.debug('Begin _prepare')
-        work = glob.glob('**/*.fits', root_dir=self._working_directory, recursive=True)
-        for file_name in work:
-            self._logger.info(f'Working on {file_name}')
-            for storage_name in self._remote_metadata_reader._storage_names.values():
-                if storage_name.file_name == os.path.basename(file_name):
-                    original_fqn = os.path.join(self._working_directory, file_name)
-                    self._remote_metadata_reader.set_headers(storage_name, original_fqn)
-                    break
-
         self._logger.debug('End _prepare')
 
     def _set_up_file_logging(self):
@@ -257,6 +246,47 @@ class ExecutionUnit:
             logging.getLogger().removeHandler(self._log_handler)
             self._log_handler.flush()
             self._log_handler.close()
+
+
+class ExecutionUnit(ExecutionUnitNoReader):
+
+    def __init__(self, config, **kwargs):
+        """
+        :param root_directory str staging space location
+        :param label str name of the execution unit. Should be unique and conform to posix directory naming standards.
+        """
+        super().__init__(config, **kwargs)
+        self._num_entries = None
+        self._remote_metadata_reader = kwargs.get('metadata_reader')
+
+    @property
+    def num_entries(self):
+        return self._num_entries
+
+    @num_entries.setter
+    def num_entries(self, value):
+        self._num_entries = value
+
+    def _prepare(self):
+        self._logger.debug('Begin _prepare')
+        work = glob.glob('**/*.fits', root_dir=self._working_directory, recursive=True)
+        for file_name in work:
+            self._logger.info(f'Working on {file_name}')
+            for storage_name in self._remote_metadata_reader._storage_names.values():
+                if storage_name.file_name == os.path.basename(file_name):
+                    original_fqn = os.path.join(self._working_directory, file_name)
+                    self._remote_metadata_reader.set_headers(storage_name, original_fqn)
+                    break
+
+    def do(self):
+        result = super().do()
+        if self._local_data_source.num_entries != self._num_entries:
+            self._logger.error(
+                f'Expected to process {self._num_entries} entries, but found {self._local_data_source.num_entries} '
+                f'entries.'
+            )
+            result = -1
+        return result
 
 
 class ExecutionUnitOrganizeExecutes(OrganizeExecutes):

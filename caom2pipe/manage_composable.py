@@ -939,6 +939,7 @@ class Config:
         self._log_to_file = False
         self._log_file_directory = None
         self._lookup = {}
+        self._rclone_options = {}
         self._storage_host = None
         self._task_types = []
         self._success_log_file_name = None
@@ -1090,6 +1091,14 @@ class Config:
     @lookup.setter
     def lookup(self, value):
         self._lookup = value
+
+    @property
+    def rclone_options(self):
+        return self._rclone_options
+
+    @rclone_options.setter
+    def rclone_options(self, value):
+        self._rclone_options = value
 
     @property
     def use_local_files(self):
@@ -1565,6 +1574,7 @@ class Config:
             f'  progress_fqn:: {self.progress_fqn}\n'
             f'  proxy_file_name:: {self.proxy_file_name}\n'
             f'  proxy_fqn:: {self.proxy_fqn}\n'
+            f'  rclone_options:: {self.rclone_options}\n'
             f'  recurse_data_sources:: {self.recurse_data_sources}\n'
             f'  rejected_directory:: {self.rejected_directory}\n'
             f'  rejected_file_name:: {self.rejected_file_name}\n'
@@ -1703,6 +1713,7 @@ class Config:
             )
             self.lookup = config.get('lookup', {})
             self.meta_read_groups = config.get('meta_read_groups', [])
+            self.rclone_options = config.get('rclone_options', {})
             self.task_types = Config._obtain_task_types(config, [])
             self.collection = config.get('collection', 'TEST')
             self.success_log_file_name = config.get(

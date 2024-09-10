@@ -220,7 +220,7 @@ class Validator:
     @staticmethod
     def filter_column(value):
         # meta is usually a URI, and want just a file name
-        return value.split('/')[-1]
+        return value.split('/')[-1].replace('.gz', '')
 
     @staticmethod
     def find_missing(in_here, from_there, column):

@@ -353,6 +353,11 @@ class ListDirSeparateDataSource(DataSource):
         self._extensions = config.data_source_extensions
         self._recursive = config.recurse_data_sources
         self._work = deque()
+        self._num_entries = 0
+
+    @property
+    def num_entries(self):
+        return self._num_entries
 
     def default_filter(self, entry):
         work_with_file = False
@@ -380,6 +385,10 @@ class ListDirSeparateDataSource(DataSource):
                     if self.default_filter(entry):
                         self._logger.debug(f'Adding {entry.path} to work list.')
                         self._work.append(entry.path)
+
+    def _capture_todo(self):
+        super()._capture_todo()
+        self._num_entries = len(self._work)
 
 
 class ListDirTimeBoxDataSource(IncrementalDataSource):

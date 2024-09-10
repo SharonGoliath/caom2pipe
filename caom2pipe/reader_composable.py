@@ -443,6 +443,27 @@ class RemoteRcloneMetadataReader(FileMetadataReader):
                 del self._storage_names[entry]
 
 
+class FromRemoteFileMetadataReader(FileMetadataReader):
+    """Use case: FITS files on local disk."""
+
+    def __init__(self):
+        super().__init__()
+        self._max_dt = None
+
+    @property
+    def max_dt(self):
+        return self._max_dt
+
+    def set_file_info(self, storage_name):
+        """Maintain the max_dt while setting file info."""
+        super().set_file_info(storage_name)
+        if self._max_dt is None:
+            self._max_dt = storage_name.file_info.lastmod
+        else:
+            self._max_dt = max(self._max_dt, storage_name.file_info.lastmod)
+        self._logger.error(f'End set_file_info with maximum file timestamp of {self._max_dt}')
+
+
 class VaultReader(MetadataReader):
     """Use case: vault."""
 
