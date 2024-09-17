@@ -1196,7 +1196,6 @@ class TelescopeMapping:
                 replace_these.add(entry)
 
 
-
 class Fits2caom2Visitor:
     """
     Use a TelescopeMapping specialization instance to create a CAOM2
