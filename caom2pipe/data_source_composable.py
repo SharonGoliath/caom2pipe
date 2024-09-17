@@ -495,6 +495,7 @@ class LocalFilesDataSource(ListDirTimeBoxDataSource):
                 'Not STORE\'ing data - ignore config.yml '
                 'cleanup_files_when_storing setting.'
             )
+        self._num_entries = 0
 
     def get_collection(self, ignore=None):
         return self._collection

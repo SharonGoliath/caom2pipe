@@ -73,7 +73,7 @@ import shutil
 
 from copy import deepcopy
 
-from caom2pipe.data_source_composable import ListDirSeparateDataSource
+from caom2pipe.data_source_composable import LocalFilesDataSource
 from caom2pipe.execute_composable import OrganizeExecutes
 from caom2pipe.manage_composable import create_dir, make_datetime, TaskType
 from caom2pipe.reader_composable import FromRemoteFileMetadataReader
@@ -176,7 +176,8 @@ class ExecutionUnitNoReader:
             self._clients,
             self._reporter,
         )
-        self._local_data_source = ListDirSeparateDataSource(todo_config)
+        # this data_source calls fitsverify
+        self._local_data_source = LocalFilesDataSource(todo_config, self._clients.data_client, local_metadata_reader)
         self._local_data_source.reporter = self._reporter
         # start a TodoRunner with the new Config instance, data_source, and metadata_reader
         todo_runner = TodoRunner(
