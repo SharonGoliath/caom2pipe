@@ -328,6 +328,7 @@ class Rejected:
     NO_REASON = ''
     BAD_DATA = 'bad_data'
     BAD_METADATA = 'bad_metadata'
+    FITS_VERIFY = 'fitsverify'
     INVALID_FILE_NAME = 'invalid_file_name'
     INVALID_FORMAT = 'is_valid_fails'
     MISSING = 'missing_at_source'
@@ -341,6 +342,7 @@ class Rejected:
     reasons = {
         BAD_DATA: 'Header missing END card',
         BAD_METADATA: 'Cannot build an observation',
+        FITS_VERIFY: 'fitsverify',
         INVALID_FILE_NAME: 'Invalid name format',
         INVALID_FORMAT: 'Invalid observation ID',
         MISSING: 'Could not find JSON record for',
@@ -403,6 +405,9 @@ class Rejected:
 
     def get_bad_metadata(self):
         return self.content[Rejected.BAD_METADATA]
+
+    def get_fitsverify(self):
+        return self.content[Rejected.FITS_VERIFY]
 
     def get_no_preview(self):
         return self.content[Rejected.NO_PREVIEW]

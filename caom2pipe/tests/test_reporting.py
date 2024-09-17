@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 # ***********************************************************************
 # ******************  CANADIAN ASTRONOMY DATA CENTRE  *******************
 # *************  CENTRE CANADIEN DE DONNÉES ASTRONOMIQUES  **************
@@ -405,7 +404,7 @@ def test_report_output_todo_vault(verify_mock, test_config, tmpdir):
                     assert test_report._timeouts_sum == 0, f'timeouts {diagnostic} {test_report.report()}'
                     assert test_report._retry_sum == 0, f'retry {diagnostic} {test_report.report()}'
                     assert test_report._errors_sum == 2, f'errors {diagnostic} {test_report.report()}'
-                    assert test_report._rejected_sum == 0, f'rejection {diagnostic} {test_report.report()}'
+                    assert test_report._rejected_sum == 1, f'rejection {diagnostic} {test_report.report()}'
                     assert test_report._skipped_sum == skipped_sum, f'skipped {diagnostic} {test_report.report()}'
     finally:
         chdir(orig_cwd)
