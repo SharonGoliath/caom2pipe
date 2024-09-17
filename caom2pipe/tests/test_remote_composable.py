@@ -69,7 +69,7 @@
 from os import listdir
 
 from caom2pipe.manage_composable import make_datetime
-from caom2pipe.remote_composable import ExecutionUnit
+from caom2pipe.remote_composable import ExecutionUnitNoReader
 
 from mock import Mock
 
@@ -78,14 +78,16 @@ def test_execution_unit_start_stop(test_config, tmp_path):
     kwargs = {
         'clients': None,
         'data_source': None,
-        'metadata_reader': None,
         'reporter': Mock(),
-        'prev_exec_dt': make_datetime('2023-10-28T20:47:49.000000000Z'),
-        'exec_dt': make_datetime('2023-11-28T20:47:49.000000000Z'),
     }
     test_config.change_working_directory(tmp_path)
     test_config.cleanup_files_when_storing = True
-    test_subject = ExecutionUnit(test_config, **kwargs)
+    test_subject = ExecutionUnitNoReader(
+        test_config,
+        prev_exec_time=make_datetime('2023-10-28T20:47:49.000000000Z'),
+        exec_time=make_datetime('2023-11-28T20:47:49.000000000Z'),
+        **kwargs,
+    )
 
     # preconditions
     test_files = listdir(tmp_path)
@@ -103,7 +105,12 @@ def test_execution_unit_start_stop(test_config, tmp_path):
     assert len(test_files) == 0, 'post-condition directory should be cleaned up and empty'
 
     test_config.cleanup_files_when_storing = False
-    test_subject = ExecutionUnit(test_config, **kwargs)
+    test_subject = ExecutionUnitNoReader(
+        test_config,
+        prev_exec_time=make_datetime('2023-10-28T20:47:49.000000000Z'),
+        exec_time=make_datetime('2023-11-28T20:47:49.000000000Z'),
+        **kwargs,
+    )
 
     # preconditions
     test_files = listdir(tmp_path)
