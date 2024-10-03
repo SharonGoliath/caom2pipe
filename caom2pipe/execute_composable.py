@@ -115,6 +115,7 @@ import logging
 import os
 import traceback
 
+from datetime import datetime
 from shutil import copyfileobj
 from urllib.parse import urlparse
 
@@ -1284,7 +1285,7 @@ class OrganizeExecutes:
                 elif task_type == mc.TaskType.STORE:
                     self._logger.debug(f'Choosing executor Store for {task_type}.')
                     self._executors.append(
-                        Store(self.config, self._reporter, self._clients, self._metadata_reader, self._store_transfer)
+                        Store(self._config, self._reporter, self._clients, self._metadata_reader, self._store_transfer)
                     )
                 elif task_type == mc.TaskType.INGEST:
                     if self.chooser is not None and self.chooser.needs_delete():
@@ -1294,7 +1295,7 @@ class OrganizeExecutes:
                         )
                         self._executors.append(
                             MetaVisitDeleteCreate(
-                                self.config, self._meta_visitors, self._reporter, self._metadata_reader, self._clients
+                                self._config, self._meta_visitors, self._reporter, self._metadata_reader, self._clients
                             )
                         )
                     else:
@@ -1303,7 +1304,7 @@ class OrganizeExecutes:
                         )
                         self._executors.append(
                             MetaVisit(
-                                self.config, self._meta_visitors, self._reporter, self._metadata_reader, self._clients
+                                self._config, self._meta_visitors, self._reporter, self._metadata_reader, self._clients
                             )
                         )
                 elif task_type == mc.TaskType.MODIFY:
@@ -1348,15 +1349,13 @@ class OrganizeExecutes:
                     )
                     self._executors.append(
                         MetaVisit(
-                            self.config, self._meta_visitors, self._reporter, self._metadata_reader, self._clients
+                            self._config, self._meta_visitors, self._reporter, self._metadata_reader, self._clients
                         )
                     )
                 elif task_type == mc.TaskType.DEFAULT:
                     pass
                 else:
-                    raise mc.CadcException(
-                        f'Do not understand task type {task_type}'
-                    )
+                    raise mc.CadcException(f'Do not understand task type {task_type}')
 
     def do_one(self, storage_name):
         """Process one entry.
@@ -1393,6 +1392,58 @@ class OrganizeExecutes:
             result_message = 'Invalid name format'
         self._logger.debug(f'Done do_one with result {result} and message {result_message}')
         return result, result_message
+
+
+class OrganizeExecutesRay(OrganizeExecutes):
+    def __init__(self, config, data_visitors, meta_visitors):
+        super().__init__(
+            config,
+            meta_visitors,
+            data_visitors,
+            chooser=None,
+            store_transfer=None,
+            modify_transfer=None,
+            metadata_reader=None,
+            clients=None,
+            reporter=None,
+        )
+
+    def do_one(self, storage_name):
+        """Process one entry.
+        :param storage_name instance of StorageName for the collection
+        """
+        self._logger.debug(f'Begin do_one {storage_name}')
+        start_s = datetime.now().timestamp()
+        if storage_name.is_valid():
+            self._set_up_file_logging(storage_name)
+            try:
+                if self.is_rejected(storage_name):
+                    # successful rejection of the execution case
+                    result = 0
+                    self._reporter.capture_failure(storage_name._obs_id, storage_name._file_name, 'Rejected')
+                else:
+                    self._create_workspace(storage_name.obs_id)
+                    context = {'storage_name': storage_name}
+                    for executor in self._executors:
+                        self._logger.info(f'Task with {executor.__class__.__name__} for {storage_name.obs_id}')
+                        executor.execute(context)
+                    result = 0
+                    self._reporter.capture_success(storage_name._obs_id, storage_name._file_name, start_s)
+            except Exception as e:
+                result_message = f'Execution failed for {storage_name.obs_id} with {e}'
+                self._logger.warning(result_message)
+                self._logger.debug(traceback.format_exc())
+                result = -1
+                self._reporter.capture_failure(storage_name._obs_id, storage_name._file_name, result_message)
+            finally:
+                self._clean_up_workspace(storage_name.obs_id)
+                self._unset_file_logging()
+        else:
+            self._logger.error(f'{storage_name.obs_id} failed naming validation check.')
+            result = -1
+            self._reporter.capture_failure(storage_name._obs_id, storage_name._file_name, 'Invalid name format')
+        self._logger.debug(f'Done do_one with result {result} and message {result_message}')
+        return result
 
 
 class OrganizeWithContext(OrganizeExecutes):

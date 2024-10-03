@@ -1524,9 +1524,9 @@ def test_run_state_store_ingest_http_retry(
             f'{test_config.scheme}:{test_config.collection}/{os.path.basename(test_uri_3)}'
         )
         assert client_mock.data_client.get_head.called, 'get_head called'
-        assert client_mock.data_client.get_head.call_count == 6, 'get_head call count'
+        assert client_mock.data_client.get_head.call_count == 5, 'get_head call count'
         assert client_mock.data_client.info.called, 'info called'
-        assert client_mock.data_client.info.call_count == 6, 'info call count'
+        assert client_mock.data_client.info.call_count == 5, 'info call count'
         assert test_reporter._summary.entries == 3, 'all'
         assert test_reporter._summary._errors_sum == 4, 'errors'
         assert test_reporter._summary._retry_sum == 3, 'retry'

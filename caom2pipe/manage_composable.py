@@ -319,6 +319,12 @@ class State:
         write_as_yaml(bookmark, state_fqn)
 
 
+class StateRay(State):
+
+    def __init__(self):
+        self.bookmarks = {}
+
+
 class Rejected:
     """Persist information between pipeline invocations about the observation
     IDs that will fail a particular TaskType.
@@ -679,6 +685,12 @@ class ExecutionReporter2(ExecutionReporter):
             self._observable.rejected.record(reason, entry)
             self._summary.add_rejections(1)
         self._logger.debug('End capture_failure_2')
+
+
+class ExecutionReporterRay(ExecutionReporter2):
+
+    def __init__(self, config):
+        super().__init__(config)
 
 
 class ExecutionSummary:
