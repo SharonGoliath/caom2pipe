@@ -1265,7 +1265,7 @@ class Fits2caom2Visitor:
                         algorithm_name =(
                             'composite'
                             if blueprint._get('Observation.algorithm.name') == 'exposure'
-                            else blueprint._get('Observation.algorithm.name')
+                            else parser._get_from_list('Observation.algorithm.name', 0)
                         )
                         self._observation = DerivedObservation(
                             collection=self._storage_name.collection,
