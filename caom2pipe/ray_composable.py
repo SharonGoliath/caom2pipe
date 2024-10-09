@@ -70,67 +70,59 @@ import logging
 import ray
 import traceback
 
-from datetime import datetime, timezone
+from datetime import datetime
 from os import scandir
+from os.path import basename, join
 
-from caom2tools.caom2utils.data_util import get_local_file_headers, get_local_file_info
+from caom2utils.data_util import get_local_file_headers, get_local_file_info
 from caom2pipe.astro_composable import check_fitsverify
-from caom2pipe.client_composable import ClientCollection
 from caom2pipe.data_source_composable import ListDirSeparateDataSource
 from caom2pipe.execute_composable import OrganizeExecutesRay
-from caom2pipe.manage_composable import Config, exec_cmd, ExecutionReporterRay, increment_time, StateRay
+from caom2pipe.manage_composable import Config, create_dir, exec_cmd, ExecutionReporterRay, increment_time, StateRay
+from caom2pipe.manage_composable import StorageName
 from caom2pipe.run_composable import TodoRunner
 
 
+# @ray.remote
+def do_one_ray(entry, organizer):
+    result = None
+    try:
+        result = organizer.do_one(entry)
+    except Exception as e:
+        logging.error(e)
+        logging.error(traceback.format_exc())
+        result = -1
+    return result
 
-@ray.remote
-class X:
 
-    def __init__(self, entry, organizer):
-        self._entry = entry
-        self._file_info = None
-        self._metadata = None
-        self._obs_id = None
-        self._file_name = None
-        self._file_uri = None
-        self._product_id = None
-        self._current_count = 0
-        self._organizer = organizer
-        self._logger = logging.getLogger(self.__class__.__name__)
+class Y(StorageName):
 
-    def __str__(self):
-        return self._entry
+    def __init__(self, source_names):
+        super().__init__(file_name=basename(source_names[0]), source_names=source_names)
 
-    def clean_up(self):
-        self._logger.debug(f'Begin clean_up for {self._entry}')
-        try:
-            # TODO
-            pass
-        except Exception as e:
-            self._logger.info(f'Cleanup failed for {self._entry} with {e}')
-            self._logger.debug(traceback.format_exc())
-            result = -1
-        return result
-
-    def process(self):
-        self._logger.debug(f'Begin process for {self._entry}.')
-        result = self._organizer.do_one(self)
-        self._logger.debug(f'End process with result {result}.')
-        return result
+    def set_file_id(self, **kwargs):
+        self._file_id = basename(StorageName.remove_extensions(self._source_names[0]))
 
 
 class HttpStagingDataSource(ListDirSeparateDataSource):
     """rclone from an http source"""
 
-    def __init__(self, config, start_dt, end_dt, data_source):
+    def __init__(self, config, start_dt, end_dt, data_source_key, reporter):
         super().__init__(config)
         self._start_dt = start_dt
         self._end_dt = end_dt
-        if data_source[-1] == '/':
-            self._data_source = data_source
+        if data_source_key[-1] == '/':
+            self._data_source = data_source_key
         else:
-            self._data_source = f'{data_source}/'
-        self._working_directory = None
+            self._data_source = f'{data_source_key}/'
+        self._label = (
+            f'{start_dt.isoformat().replace(":", "_").replace(".", "_")}_'
+            f'{end_dt.isoformat().replace(":", "_").replace(".", "_")}'
+        )
+        self._working_directory = join(config.working_directory, self._label)
+        create_dir(self._working_directory)
+        self._include_pattern = ','.join(f'*{ii}' for ii in config.data_source_extensions)
+        self._reporter = reporter
 
     def _append_work(self, entry):
         with scandir(entry) as dir_listing:
@@ -139,11 +131,11 @@ class HttpStagingDataSource(ListDirSeparateDataSource):
                     self._append_work(entry.path)
                 else:
                     if self.default_filter(entry):
-                        x = X(entry.path)
-                        x._file_info = get_local_file_info(entry.path)
-                        x._metadata = get_local_file_headers(entry.path)
-                        self._logger.debug(f'Adding {x} to work list.')
-                        self._work.append(x)
+                        y = Y([entry.path])
+                        y._file_info = get_local_file_info(entry.path)
+                        y._metadata = get_local_file_headers(entry.path)
+                        self._logger.debug(f'Adding {y} to work list.')
+                        self._work.append(y)
 
     def _is_valid(self, path):
         return True
@@ -156,11 +148,10 @@ class HttpStagingDataSource(ListDirSeparateDataSource):
 
     def _stage(self):
         self._logger.debug(f'Begin _stage from {self._start_dt} to {self._end_dt}')
+        rclone_options_str = self._config.rclone_options if self._config.rclone_options else ''
         # get the files from the DataSource to the staging space
-        # --max-age  -> only transfer files younger than this
-        # --min-age -> only transfer files older than this
         exec_cmd(
-            f'rclone copy {self._config.rclone_options} --max-age={self._start_dt.isoformat()} '
+            f'rclone copy {rclone_options_str} --max-age={self._start_dt.isoformat()} '
             f'--min-age={self._end_dt.isoformat()} --include={self._include_pattern} --http-url '
             f'{self._data_source} :http: {self._working_directory}'
         )
@@ -177,32 +168,47 @@ class HttpStagingDataSource(ListDirSeparateDataSource):
 
 class RayTodoRunner(TodoRunner):
 
-    def __init__(self, config, organizer, reporter, start_dt, end_dt, data_source):
-        super.__init__(
+    def __init__(self, config, organizer, reporter, start_dt, end_dt, data_source_key):
+        # TODO - need to clean up the staging directories created here?
+        self._stager = HttpStagingDataSource(config, start_dt, end_dt, data_source_key, reporter)
+        super().__init__(
             config=config,
             organizer=organizer,
             builder=None,
-            data_sources=None,
+            data_sources=[self._stager],
             metadata_reader=None,
             reporter=reporter,
         )
         self._entries = []
-        self._stager = HttpStagingDataSource(start_dt, end_dt, data_source)
+
+    @property
+    def num_entries(self):
+        return self._num_entries
 
     def _build_todo_list(self, data_source):
         self._entries = self._stager.get_work()
+        self._num_entries = len(self._entries)
 
     def _process_entry(self):
         raise NotImplementedError
 
     def _run_todo_list(self, data_source, current_count):
-        entries = [X.remote() for ii in self._config.parallel_count]
-        [entry.process.remote() for entry in entries]
-        futures = [entry.clean_up.remote() for entry in entries]
-        ray.get(futures)
+        self._logger.debug('Begin _run_todo_list')
+        result = 0
+        for entry in self._entries:
+            do_one_ray(entry, self._organizer)
+        # organizer_ref = ray.put(self._organizer)
+        # entry_references = [ray.put(entry) for entry in self._entries]
+        # execution_references = [do_one_ray.remote(entry_ref, organizer_ref) for entry_ref in entry_references]
+        # for reference in execution_references:
+        #     # call ray.get as late as possible
+        #     result |= ray.get(reference)
+        self._logger.debug('End _run_todo_list')
+        return result
 
 
 class StateRunnerNoRemoteReaderNoDataSource(TodoRunner):
+    """This Runner will stage data from a remote location, and then execute ingestion from the staging location."""
 
     def __init__(self, config, organizer, reporter):
         super().__init__(
@@ -218,16 +224,19 @@ class StateRunnerNoRemoteReaderNoDataSource(TodoRunner):
         """
         :return: 0 for success, -1 for failure
         """
-        state = StateRay(self._config.state_fqn, timezone.utc)
+        self._logger.debug('Begin run')
+        state = StateRay()
+        state.read_from_file(self._config.state_fqn)
         for data_source in self._config.data_sources:
-            start_dt = state.get_start(data_source)
-            end_dt = state.get_end(data_source)
+            self._logger.info(f'Begin run for data source {data_source}')
+            start_dt = state.get_bookmark_start(data_source)
+            end_dt = state.get_bookmark_end(data_source)
 
             prev_exec_time = start_dt
             incremented = increment_time(prev_exec_time, self._config.interval)
             exec_time = min(incremented, end_dt)
 
-            self._logger.info(f'Starting at {prev_exec_time}, ending at {data_source.end_dt}')
+            self._logger.info(f'Starting at {prev_exec_time}, ending at {end_dt}')
             result = 0
             if prev_exec_time == end_dt:
                 self._logger.info(f'Start time is the same as end time {prev_exec_time}, stopping.')
@@ -239,12 +248,12 @@ class StateRunnerNoRemoteReaderNoDataSource(TodoRunner):
                     self._logger.info(f'Processing {data_source} from {prev_exec_time} to {exec_time}')
                     save_time = exec_time
                     runner = RayTodoRunner(
-                        self._config, self._organizer, self._reporter, start_dt, end_dt, data_source
+                        self._config, self._organizer, self._reporter, prev_exec_time, exec_time, data_source
                     )
                     runner.run()
                     # self._record_progress(num_entries, cumulative, prev_exec_time, save_time)
                     cumulative += self._record_progress(runner, cumulative, prev_exec_time, save_time)
-                    self._state.save_start_dt(data_source, save_time)
+                    state.save_start_dt(data_source, save_time, self._config.state_fqn)
 
                     if exec_time == end_dt:
                         # the last interval will always have the exec time
@@ -262,10 +271,11 @@ class StateRunnerNoRemoteReaderNoDataSource(TodoRunner):
                     # TODO the real time to store is going to be the runner.max_dt - how to find that,
                     # how to reference it, etc
 
-            state.save_start_dt(data_source, exec_time)
+            state.save_start_dt(data_source, exec_time, self._config.state_fqn)
             self._end_message(data_source, exec_time)
-            self._logger.debug(f'End _process_data_source with result {result}')
-            return result
+            self._logger.debug(f'End run for data source {data_source} with result {result}')
+        self._logger.debug('End run')
+        return result
 
     def _end_message(self, data_source, exec_time):
         msg = f'Done for {data_source}, saved state is {exec_time}'
@@ -283,11 +293,11 @@ class StateRunnerNoRemoteReaderNoDataSource(TodoRunner):
 
 
 def ray_execution(data_visitors, meta_visitors):
+    # ray.init()
     config = Config()
     config.get_executors()
-    clients = ClientCollection(config)
-    organizer = OrganizeExecutesRay(config, data_visitors, meta_visitors)
     reporter = ExecutionReporterRay(config)
+    organizer = OrganizeExecutesRay(config, data_visitors, meta_visitors, reporter)
     runner = StateRunnerNoRemoteReaderNoDataSource(
         config=config,
         organizer=organizer,

@@ -1084,6 +1084,32 @@ class NoFheadScrapeExpander(CaomExecuteContext):
         self._logger.debug(f'End execute')
 
 
+class CaomExecuteRay(CaomExecute):
+
+    def __init__(self, clients, config, meta_visitors, reporter):
+        super().__init__(
+            config=config,
+            meta_visitors=meta_visitors,
+            reporter=reporter,
+            metadata_reader=None,
+            clients=clients,
+        )
+
+    def execute(self, context):
+        self._logger.debug('Begin execute')
+        self._logger.debug('the steps:')
+        self.storage_name = context.get('storage_name')
+
+
+class ScrapeRay(CaomExecuteRay):
+    """Defines the pipeline step for Collection creation of a CAOM model
+    observation. The file containing the metadata is located on disk.
+    No record is written to a web service."""
+
+    def __init__(self, config, meta_visitors, reporter):
+        super().__init__(clients=None, config=config, meta_visitors=meta_visitors, reporter=reporter)
+
+
 class OrganizeChooser:
     """Extend this class to provide a way to make collection-specific
     complex conditions available within the OrganizeExecute class."""
@@ -1395,7 +1421,7 @@ class OrganizeExecutes:
 
 
 class OrganizeExecutesRay(OrganizeExecutes):
-    def __init__(self, config, data_visitors, meta_visitors):
+    def __init__(self, config, data_visitors, meta_visitors, reporter):
         super().__init__(
             config,
             meta_visitors,
@@ -1405,8 +1431,137 @@ class OrganizeExecutesRay(OrganizeExecutes):
             modify_transfer=None,
             metadata_reader=None,
             clients=None,
-            reporter=None,
+            reporter=reporter,
         )
+
+    def _choose(self):
+        """The logic that decides which descendants of CaomExecute to
+        instantiate. This is based on the content of the config.yml file
+        for an application.
+        :destination_name StorageName extension that handles the naming rules
+            for a file.
+        """
+        if self.can_use_single_visit():
+            if mc.TaskType.SCRAPE in self.task_types:
+                self._logger.debug(f'Choosing executor NoFheadSScrape for tasks {self.task_types}.')
+                self._executors.append(
+                    NoFheadScrapeRay(
+                        self._config,
+                        self._meta_visitors,
+                        self._data_visitors,
+                        self._reporter,
+                    )
+                )
+            elif mc.TaskType.STORE in self.task_types:
+                self._logger.debug(f'Choosing executor NoFheadStoreVisit for tasks {self.task_types}.')
+                self._executors.append(
+                    NoFheadStoreVisitRay(
+                        self._config,
+                        self._clients,
+                        self._store_transfer,
+                        self._meta_visitors,
+                        self._data_visitors,
+                        self._reporter,
+                    )
+                )
+            else:
+                self._logger.debug(f'Choosing executor NoFheadVisit for tasks {self.task_types}.')
+                self._executors.append(
+                    NoFheadVisitRay(
+                        self._config,
+                        self._clients,
+                        self._modify_transfer,
+                        self._meta_visitors,
+                        self._data_visitors,
+                        self._reporter,
+                    )
+                )
+        else:
+            for task_type in self.task_types:
+                if task_type == mc.TaskType.SCRAPE:
+                    if self._config.use_local_files:
+                        self._logger.debug(
+                            f'Choosing executor Scrape for {task_type}.'
+                        )
+                        self._executors.append(ScrapeRay(self._config,  self._meta_visitors, self._reporter))
+
+                    else:
+                        raise mc.CadcException(
+                            'use_local_files must be True with Task Type '
+                            '"SCRAPE"'
+                        )
+                elif task_type == mc.TaskType.STORE:
+                    self._logger.debug(f'Choosing executor Store for {task_type}.')
+                    self._executors.append(
+                        StoreRay(self._config, self._reporter, self._clients, self._store_transfer)
+                    )
+                elif task_type == mc.TaskType.INGEST:
+                    if self.chooser is not None and self.chooser.needs_delete():
+                        self._logger.debug(
+                            f'Choosing executor MetaVisitDeleteCreate for '
+                            f'{task_type}.'
+                        )
+                        self._executors.append(
+                            MetaVisitDeleteCreateRay(
+                                self._config, self._meta_visitors, self._reporter, self._clients
+                            )
+                        )
+                    else:
+                        self._logger.debug(
+                            f'Choosing executor MetaVisit for {task_type}.'
+                        )
+                        self._executors.append(
+                            MetaVisitRay(
+                                self._config, self._meta_visitors, self._reporter, self._clients
+                            )
+                        )
+                elif task_type == mc.TaskType.MODIFY:
+                    if self._config.use_local_files:
+                        if len(self._executors) > 0 and isinstance(self._executors[0], Scrape):
+                            self._logger.debug(
+                                f'Choosing executor DataScrape for '
+                                f'{task_type}.'
+                            )
+                            self._executors.append(DataScrapeRay(self._config, self._data_visitors))
+                        else:
+                            self._logger.debug(
+                                f'Choosing executor LocalDataVisit for '
+                                f'{task_type}.'
+                            )
+                            self._executors.append(
+                                LocalDataVisitRay(
+                                    self._config,
+                                    self._data_visitors,
+                                    self._reporter,
+                                    self._clients,
+                                )
+                            )
+                    else:
+                        self._logger.debug(
+                            f'Choosing executor DataVisit for {task_type}.'
+                        )
+                        self._executors.append(
+                            DataVisitRay(
+                                self._config,
+                                self._data_visitors,
+                                self._reporter,
+                                self._modify_transfer,
+                                self._clients,
+                            )
+                        )
+                elif task_type == mc.TaskType.VISIT:
+                    self._logger.debug(
+                        f'Choosing executor MetaVisit for {task_type}.'
+                    )
+                    self._executors.append(
+                        MetaVisitRay(
+                            self._config, self._meta_visitors, self._reporter, self._clients
+                        )
+                    )
+                elif task_type == mc.TaskType.DEFAULT:
+                    pass
+                else:
+                    raise mc.CadcException(f'Do not understand task type {task_type}')
 
     def do_one(self, storage_name):
         """Process one entry.
@@ -1420,7 +1575,7 @@ class OrganizeExecutesRay(OrganizeExecutes):
                 if self.is_rejected(storage_name):
                     # successful rejection of the execution case
                     result = 0
-                    self._reporter.capture_failure(storage_name._obs_id, storage_name._file_name, 'Rejected')
+                    self._reporter.capture_failure_2(storage_name._file_name, 'Rejected')
                 else:
                     self._create_workspace(storage_name.obs_id)
                     context = {'storage_name': storage_name}
@@ -1432,17 +1587,17 @@ class OrganizeExecutesRay(OrganizeExecutes):
             except Exception as e:
                 result_message = f'Execution failed for {storage_name.obs_id} with {e}'
                 self._logger.warning(result_message)
-                self._logger.debug(traceback.format_exc())
+                self._logger.error(traceback.format_exc())
                 result = -1
-                self._reporter.capture_failure(storage_name._obs_id, storage_name._file_name, result_message)
+                self._reporter.capture_failure_2(storage_name._file_name, result_message)
             finally:
                 self._clean_up_workspace(storage_name.obs_id)
                 self._unset_file_logging()
         else:
             self._logger.error(f'{storage_name.obs_id} failed naming validation check.')
             result = -1
-            self._reporter.capture_failure(storage_name._obs_id, storage_name._file_name, 'Invalid name format')
-        self._logger.debug(f'Done do_one with result {result} and message {result_message}')
+            self._reporter.capture_failure_2(storage_name._file_name, 'Invalid name format')
+        self._logger.debug(f'Done do_one with result {result}')
         return result
 
 

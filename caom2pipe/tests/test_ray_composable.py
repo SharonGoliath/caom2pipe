@@ -66,22 +66,50 @@
 # ***********************************************************************
 #
 
+from datetime import datetime
+from shutil import copyfile
+
 from caom2pipe.caom_composable import Fits2caom2Visitor
-from caom2pipe.manage_composable import State, TaskType
+from caom2pipe.manage_composable import StateRay, TaskType
 from caom2pipe.ray_composable import ray_execution
 
 from unittest.mock import patch
 
-
-@patch('caom2pipe.ray_composable.ClientCollection')
-def test_nominal_ray_execution(clients_mock, test_config, tmp_path, change_test_dir):
+@patch('caom2pipe.ray_composable.exec_cmd')
+@patch('caom2pipe.client_composable.ClientCollection')
+def test_nominal_ray_execution(clients_mock, exec_cmd_mock, test_data_dir, test_config, tmp_path, change_test_dir):
+    import logging
+    logging.getLogger().setLevel(logging.DEBUG)
     test_config.change_working_directory(tmp_path)
-    test_config.task_types = [TaskType.INGEST]
+    test_config.task_types = [TaskType.SCRAPE]
+    test_config.data_sources = ['https://localhost:65432/rclone_listing']
+    test_config.rclone_options = None
+    test_config.interval = 40
+    test_config.use_local_files = True
+    test_config.logging_level = 'DEBUG'
+    test_config.write_to_file(test_config)
     with open(test_config.proxy_file_name, 'w') as f:
         f.write('test content')
 
-    test_config.write_to_file(test_config)
-    State.write_to_file(test_config.state_fqn)
+    state_ray = StateRay()
+    test_start_time = datetime(2024, 10, 6, 1, 1, 1)
+    test_end_time = datetime(2024, 10, 6, 2, 2, 2)
+    state_ray.add_bookmark_start(test_config.data_sources[0], test_start_time)
+    state_ray.add_bookmark_end(test_config.data_sources[0], test_end_time)
+    state_ray.write_content(test_config.state_fqn)
+
+    def _exec_mock(cmd):
+        assert cmd in [
+            f'rclone copy  --max-age=2024-10-06T01:41:01 --min-age={test_end_time.isoformat()} '
+            f'--include=*.fits --http-url {test_config.data_sources[0]}/ :http: '
+            f'{tmp_path}/2024-10-06T01_41_01_2024-10-06T02_02_02',
+            f'rclone copy  --max-age={test_start_time.isoformat()} --min-age=2024-10-06T01:41:01 '
+            f'--include=*.fits --http-url {test_config.data_sources[0]}/ :http: '
+            f'{tmp_path}/2024-10-06T01_01_01_2024-10-06T01_41_01',
+        ]
+        if '--min-age=2024-10-06T01:41:01' in cmd:
+            copyfile('/test_files/correct.fits', f'{tmp_path}/2024-10-06T01_01_01_2024-10-06T01_41_01/correct.fits')
+    exec_cmd_mock.side_effect = _exec_mock
 
     test_data_visitors = []
     test_meta_visitors = [Fits2caom2Visitor]

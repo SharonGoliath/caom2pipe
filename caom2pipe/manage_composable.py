@@ -323,6 +323,62 @@ class StateRay(State):
 
     def __init__(self):
         self.bookmarks = {}
+        self.context = {}
+        self.content = {
+            'bookmarks': self.bookmarks,
+            'context': self.context,
+        }
+        self.logger = logging.getLogger(self.__class__.__name__)
+
+    def add_bookmark_end(self, bookmark_key, end_dt):
+        if bookmark_key not in self.bookmarks:
+            self.bookmarks[bookmark_key] = {}
+        self.bookmarks[bookmark_key]['end_timestamp'] = end_dt
+
+    def add_bookmark_start(self, bookmark_key, start_dt):
+        super().add_bookmark(bookmark_key, start_dt)
+
+    def get_bookmark_end(self, bookmark_key):
+        result = None
+        temp = self.bookmarks.get(bookmark_key)
+        if temp:
+            result = temp.get('end_timestamp')
+        if not result:
+            result = datetime.now()
+        return result
+
+    def get_bookmark_start(self, bookmark_key):
+        result = None
+        temp = self.bookmarks.get(bookmark_key)
+        if temp:
+            result = temp.get('last_record')
+        return result
+
+    def read_from_file(self, fqn):
+        result = read_as_yaml(fqn)
+        if result:
+            self.bookmarks = result.get('bookmarks', {})
+            self.context = result.get('context', {})
+            self.content = result
+
+    def save_start_dt(self, key, value, fqn):
+        """Write the current state as a YAML file.
+        :param key which record is being updated
+        :param value the value to update the record with
+        """
+        bookmarks = self.get_bookmark(key)
+        if bookmarks is None:
+            context = self.get_context(key)
+            if context is None:
+                self.logger.warning(f'No content found for {key}')
+            else:
+                self.context[key] = value
+                self.logger.debug(f'Saving context {value} {fqn}')
+                write_as_yaml(self.content, fqn)
+        else:
+            self.bookmarks[key]['last_record'] = value
+            self.logger.debug(f'Saving bookmarked last record {value} {fqn}')
+            write_as_yaml(self.content, fqn)
 
 
 class Rejected:
@@ -691,6 +747,7 @@ class ExecutionReporterRay(ExecutionReporter2):
 
     def __init__(self, config):
         super().__init__(config)
+        self._observable = Observable(config)
 
 
 class ExecutionSummary:
@@ -1128,6 +1185,7 @@ class Config:
         self._features = Features()
         self._cleanup_failure_destination = None
         self._cleanup_success_destination = None
+        self._parallel_count = 1
         self._preview_scheme = 'cadc'
         self._scheme = 'cadc'
         self._server_side_resource_id = None
@@ -1636,6 +1694,15 @@ class Config:
         self._observable_directory = value
 
     @property
+    def parallel_count(self):
+        """How many parallel tasks to run."""
+        return self._parallel_count
+
+    @parallel_count.setter
+    def parallel_count(self, value):
+        self._parallel_count = value
+
+    @property
     def preview_scheme(self):
         """Preview scheme for Artifact URIs, which may be different based on who creates the file."""
         return self._preview_scheme
@@ -1711,6 +1778,7 @@ class Config:
             f'  meta_read_groups:: {self.meta_read_groups}\n'
             f'  observable_directory:: {self.observable_directory}\n'
             f'  observe_execution:: {self.observe_execution}\n'
+            f'  parallel_count:: {self.parallel_count}\n'
             f'  preview_scheme:: {self.preview_scheme}\n'
             f'  progress_file_name:: {self.progress_file_name}\n'
             f'  progress_fqn:: {self.progress_fqn}\n'
@@ -1905,6 +1973,7 @@ class Config:
             self.store_modified_files_only = config.get(
                 'store_modified_files_only', False
             )
+            self.parallel_count = config.get('parallel_count', 1)
             self.preview_scheme = config.get('preview_scheme', 'cadc')
             self._report_fqn = os.path.join(
                 self.log_file_directory,

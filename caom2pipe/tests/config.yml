@@ -1,14 +1,59 @@
-working_directory: /usr/src/app/caom2pipe/caom2pipe/tests/data
-proxy_file_name: test_proxy.pem
-resource_id: ivo://cadc.nrc.ca/sc2repo
-todo_file_name: todo.txt
-state_file_name: state.yml
-cache_file_name: value_repair_cache.yml
-use_local_files: False
-logging_level: DEBUG
-archive: NEOSS
-collection: NEOSSAT
+bookmark: dao_timestamp
+cleanup_failure_destination: vos:goliaths/DAOTest/fail
+cleanup_files_when_storing: True
+cleanup_success_destination: vos:goliaths/DAOTest/pass
+collection: DAO
+data_read_groups: []
+data_source_extensions: ['.fits.gz']
+data_sources: ['vos:goliaths/DAOTest']
+dump_blueprint: False
+failure_fqn: /tmp/pytest-of-root/pytest-47/test_vo_with_cleanup0/logs/fail.txt
+failure_log_file_name: fail.txt
 features:
-  supports_composite: False
   run_in_airflow: True
-  unexpected: False
+  supports_catalog: True
+  supports_composite: True
+  supports_multiple_files: True
+http_get_timeout: 10
+interval: 10
+is_connected: True
+log_file_directory: /tmp/pytest-of-root/pytest-47/test_vo_with_cleanup0/logs
+log_to_file: False
+logging_level: INFO
+lookup: {}
+meta_read_groups: []
+observable_directory: /tmp/pytest-of-root/pytest-47/test_vo_with_cleanup0/metrics
+observe_execution: False
+preview_scheme: cadc
+progress_file_name: progress.txt
+progress_fqn: /tmp/pytest-of-root/pytest-47/test_vo_with_cleanup0/logs/progress.txt
+proxy_file_name: cadcproxy.pem
+proxy_fqn: /tmp/pytest-of-root/pytest-47/test_vo_with_cleanup0/cadcproxy.pem
+rclone_options: {}
+recurse_data_sources: True
+rejected_directory: /tmp/pytest-of-root/pytest-47/test_vo_with_cleanup0/rejected
+rejected_file_name: rejected.yml
+rejected_fqn: /tmp/pytest-of-root/pytest-47/test_vo_with_cleanup0/rejected/rejected.yml
+report_fqn: /tmp/pytest-of-root/pytest-47/test_vo_with_cleanup0/logs/test_vo_with_cleanup0_report.txt
+resource_id: ivo://cadc.nrc.ca/sc2repo
+retry_count: 1
+retry_decay: 1
+retry_failures: False
+retry_file_name: retry.txt
+retry_fqn: /tmp/pytest-of-root/pytest-47/test_vo_with_cleanup0/logs/retry.txt
+scheme: cadc
+state_file_name: state.yml
+state_fqn: /tmp/pytest-of-root/pytest-47/test_vo_with_cleanup0/state.yml
+storage_inventory_resource_id: ivo://cadc.nrc.ca/TEST
+store_modified_files_only: True
+success_fqn: /tmp/pytest-of-root/pytest-47/test_vo_with_cleanup0/logs/good.txt
+success_log_file_name: good.txt
+task_types:
+  - store
+time_zone: tzfile('/usr/share/zoneinfo/UTC')
+total_retry_fqn: /tmp/pytest-of-root/pytest-47/test_vo_with_cleanup0/logs/total_retry.txt
+use_local_files: False
+use_vos: True
+work_file: todo.txt
+work_fqn: /tmp/pytest-of-root/pytest-47/test_vo_with_cleanup0/todo.txt
+working_directory: /tmp/pytest-of-root/pytest-47/test_vo_with_cleanup0
