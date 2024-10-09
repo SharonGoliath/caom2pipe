@@ -81,7 +81,8 @@ import os
 import traceback
 
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
+from importlib import import_module
 from time import sleep
 
 from caom2pipe import client_composable as cc
@@ -153,35 +154,23 @@ class TodoRunner:
         self._logger.debug(f'Begin _process_entry for {entry}.')
         storage_name = None
         try:
+            start_s = datetime.now(tz=timezone.utc).timestamp()
             storage_name = self._builder.build(entry)
-            if storage_name.is_valid():
-                result = self._organizer.do_one(storage_name)
-            else:
-                self._logger.error(
-                    f'{storage_name.obs_id} failed naming validation check.'
-                )
-                self._reporter.capture_failure(
-                    storage_name, BaseException('Invalid name format'), 'Invalid name format.'
-                )
-                result = -1
+            result, result_message = self._organizer.do_one(storage_name)
+            if result == 0 and result_message is None:
+                self._reporter.capture_success(storage_name.obs_id, storage_name.file_name, start_s)
+            elif result == -1 and not result_message.startswith('No executors'):
+                self._reporter.capture_failure(storage_name, BaseException(result_message), result_message)
         except Exception as e:
             if storage_name is None:
                 # keep going through storage name build failures
                 self._logger.debug(traceback.format_exc())
-                self._logger.warning(
-                    f'StorageName construction failed. Using a default '
-                    f'instance for {entry}, for logging only.'
-                )
-                storage_name = mc.StorageName(
-                    obs_id=entry, source_names=[entry]
-                )
+                self._logger.warning(f'StorageName construction failed. Using a default instance for {entry}, for logging only.')
+                storage_name = mc.StorageName(obs_id=entry, source_names=[entry])
             self._reporter.capture_failure(storage_name, e, traceback.format_exc())
-            self._logger.info(
-                f'Execution failed for {storage_name.file_name} with {e}'
-            )
+            self._logger.info(f'Execution failed for {storage_name.file_name} with {e}')
             self._logger.debug(traceback.format_exc())
-            # keep processing the rest of the entries, so don't throw
-            # this or any other exception at this point
+            # keep processing the rest of the entries, so don't throw this or any other exception at this point
             result = -1
         try:
             data_source.clean_up(entry, result, current_count)
@@ -227,8 +216,6 @@ class TodoRunner:
         result = 0
         for data_source in self._data_sources:
             self._build_todo_list(data_source)
-            # have the choose call here, so that retries don't change the set of tasks to be executed
-            self._organizer.choose()
             result |= self._run_todo_list(data_source, current_count=0)
         self._logger.debug('End run.')
         return result
@@ -238,9 +225,7 @@ class TodoRunner:
         result = 0
         if self._config.need_to_retry():
             for count in range(0, self._config.retry_count):
-                self._logger.warning(
-                    f'Beginning retry {count + 1} in {os.getcwd()} for data source {0}'
-                )
+                self._logger.warning(f'Beginning retry {count + 1} in {os.getcwd()} for data source {0}')
                 # to preserve the clean_up behaviour from one of the original data sources
                 self._reset_for_retry(self._data_sources[0], count)
                 # make another file list
@@ -294,7 +279,6 @@ class StateRunner(TodoRunner):
         self._reset_retries()
 
         result = 0
-        self._organizer.choose()
         for data_source in self._data_sources:
             result |= self._process_data_source(data_source)
 
@@ -328,7 +312,6 @@ class StateRunner(TodoRunner):
             while exec_time <= data_source.end_dt:
                 self._logger.info(f'Processing {data_source.start_key} from {prev_exec_time} to {exec_time}')
                 save_time = exec_time
-                self._organizer.success_count = 0
                 self._reporter.set_log_location(self._config)
                 entries = data_source.get_time_box_work(prev_exec_time, exec_time)
                 num_entries = len(entries)
@@ -430,6 +413,8 @@ def common_runner_init(
     meta_visitors,
     data_visitors,
     chooser,
+    organizer_module_name='caom2pipe.execute_composable',
+    organizer_class_name='OrganizeExecutes',
 ):
     """The common initialization code between TodoRunner and StateRunner uses. <collection>2caom2 implementations can
     use the defaults created here for the 'run' call, or they can provide their own specializations of the various
@@ -490,7 +475,10 @@ def common_runner_init(
             config, clients
         )
 
-    organizer = ec.OrganizeExecutes(
+    mdul = import_module(organizer_module_name)
+    cls = getattr(mdul, organizer_class_name)
+    organizer = cls(
+    # organizer = ec.OrganizeExecutes(
         config,
         meta_visitors,
         data_visitors,
@@ -500,7 +488,6 @@ def common_runner_init(
         metadata_reader,
         clients,
         observable,
-        reporter,
     )
 
     return (
@@ -526,6 +513,8 @@ def run_by_todo(
     store_transfer=None,
     clients=None,
     metadata_reader=None,
+    organizer_module_name='caom2pipe.execute_composable',
+    organizer_class_name='OrganizeExecutes',
 ):
     """A default implementation for using the TodoRunner.
 
@@ -575,6 +564,8 @@ def run_by_todo(
         meta_visitors,
         data_visitors,
         chooser,
+        organizer_module_name,
+        organizer_class_name,
     )
 
     runner = TodoRunner(
@@ -597,6 +588,8 @@ def run_by_state(
     store_transfer=None,
     clients=None,
     metadata_reader=None,
+    organizer_module_name='caom2pipe.execute_composable',
+    organizer_class_name='OrganizeExecutes',
 ):
     """A default implementation for using the StateRunner.
 
@@ -646,6 +639,8 @@ def run_by_state(
         meta_visitors,
         data_visitors,
         chooser,
+        organizer_module_name,
+        organizer_class_name,
     )
     runner = StateRunner(
         config,
@@ -712,9 +707,7 @@ def run_single(
         metadata_reader,
         clients,
         observable,
-        reporter,
     )
-    organizer.complete_record_count = 1
     organizer.choose()
     result = organizer.do_one(storage_name)
     logging.debug(f'run_single result is {result}')

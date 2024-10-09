@@ -286,20 +286,20 @@ def test_list_dir_separate_data_source(test_config):
     assert test_subject is not None, 'ctor is broken'
     test_result = test_subject.get_work()
     assert test_result is not None, 'expect a result'
-    assert len(test_result) == 99, 'expect contents in the result'
+    assert len(test_result) == 106, 'expect contents in the result'
     assert '/test_files/sub_directory/abc.fits' in test_result, 'wrong entry'
-    assert test_reporter.all == 99, 'wrong report'
+    assert test_reporter.all == 106, 'wrong report'
 
     test_config.recurse_data_sources = False
     test_subject = dsc.ListDirSeparateDataSource(test_config)
     test_subject.reporter = test_reporter
     test_result = test_subject.get_work()
     assert test_result is not None, 'expect a non-recursive result'
-    assert len(test_result) == 95, 'expect contents in non-recursive result'
+    assert len(test_result) == 101, 'expect contents in non-recursive result'
     assert (
         '/test_files/sub_directory/abc.fits' not in test_result
     ), 'recursive result should not be present'
-    assert test_reporter.all == 194, 'wrong 2nd report'
+    assert test_reporter.all == 207, 'wrong 2nd report'
 
 
 def test_vault_list_dir_time_box_data_source(test_config):

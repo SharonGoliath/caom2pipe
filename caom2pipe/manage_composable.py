@@ -112,6 +112,7 @@ __all__ = [
     'compare_observations',
     'Config',
     'check_param',
+    'compute_md5sum',
     'convert_to_days',
     'exec_cmd',
     'exec_cmd_info',
@@ -384,8 +385,9 @@ class Rejected:
         return False
 
     def record(self, reason, entry):
-        """Keep track of an additional entry."""
-        self.content[reason].append(entry)
+        """Keep track of an additional entry, avoiding duplicates."""
+        if entry not in self.content[reason]:
+            self.content[reason].append(entry)
 
     def persist_state(self):
         """Write the current state as a YAML file."""
@@ -930,6 +932,7 @@ class Config:
         self._logging_level = None
         self._log_to_file = False
         self._log_file_directory = None
+        self._lookup = {}
         self._storage_host = None
         self._task_types = []
         self._success_log_file_name = None
@@ -978,6 +981,7 @@ class Config:
         self._cleanup_success_destination = None
         self._preview_scheme = 'cadc'
         self._scheme = 'cadc'
+        self._server_side_resource_id = None
         self._storage_inventory_resource_id = None
         self._storage_inventory_tap_resource_id = None
         self._time_zone = timezone.utc
@@ -1072,6 +1076,14 @@ class Config:
     @http_get_timeout.setter
     def http_get_timeout(self, value):
         self._http_get_timeout = value
+
+    @property
+    def lookup(self):
+        return self._lookup
+
+    @lookup.setter
+    def lookup(self, value):
+        self._lookup = value
 
     @property
     def use_local_files(self):
@@ -1188,6 +1200,14 @@ class Config:
     @storage_host.setter
     def storage_host(self, value):
         self._storage_host = value
+
+    @property
+    def server_side_resource_id(self):
+        return self._server_side_resource_id
+
+    @server_side_resource_id.setter
+    def server_side_resource_id(self, value):
+        self._server_side_resource_id = value
 
     @property
     def storage_inventory_resource_id(self):
@@ -1511,14 +1531,12 @@ class Config:
 
     def __str__(self):
         return (
-            f'\nFrom {os.getcwd()}/config.yml:\n'
+            # f'\nFrom {os.getcwd()}/config.yml:\n'
+            f'\n'
             f'  cache_fqn:: {self.cache_fqn}\n'
-            f'  cleanup_failure_destination:: '
-            f'{self.cleanup_failure_destination}\n'
-            f'  cleanup_files_when_storing:: '
-            f'{self.cleanup_files_when_storing}\n'
-            f'  cleanup_success_destination:: '
-            f'{self.cleanup_success_destination}\n'
+            f'  cleanup_failure_destination:: {self.cleanup_failure_destination}\n'
+            f'  cleanup_files_when_storing:: {self.cleanup_files_when_storing}\n'
+            f'  cleanup_success_destination:: {self.cleanup_success_destination}\n'
             f'  collection:: {self.collection}\n'
             f'  data_read_groups:: {self.data_read_groups}\n'
             f'  data_sources:: {self.data_sources}\n'
@@ -1532,6 +1550,7 @@ class Config:
             f'  log_file_directory:: {self.log_file_directory}\n'
             f'  log_to_file:: {self.log_to_file}\n'
             f'  logging_level:: {self.logging_level}\n'
+            f'  lookup:: {self.lookup}\n'
             f'  meta_read_groups:: {self.meta_read_groups}\n'
             f'  observable_directory:: {self.observable_directory}\n'
             f'  observe_execution:: {self.observe_execution}\n'
@@ -1557,6 +1576,7 @@ class Config:
             f'  source_host:: {self.source_host}\n'
             f'  state_file_name:: {self.state_file_name}\n'
             f'  state_fqn:: {self.state_fqn}\n'
+            f'  server_side_resource_id:: {self.server_side_resource_id}\n'
             f'  storage_inventory_resource_id:: {self.storage_inventory_resource_id}\n'
             f'  storage_inventory_tap_resource_id:: {self.storage_inventory_tap_resource_id}\n'
             f'  store_modified_files_only:: {self.store_modified_files_only}\n'
@@ -1675,6 +1695,7 @@ class Config:
             self.log_file_directory = config.get(
                 'log_file_directory', self.working_directory
             )
+            self.lookup = config.get('lookup', {})
             self.meta_read_groups = config.get('meta_read_groups', [])
             self.task_types = Config._obtain_task_types(config, [])
             self.collection = config.get('collection', 'TEST')
@@ -1714,6 +1735,7 @@ class Config:
             self.slack_channel = config.get('slack_channel', None)
             self.slack_token = config.get('slack_token', None)
             self.source_host = config.get('source_host', None)
+            self.server_side_resource_id = config.get('server_side_resource_id', 'ivo://cadc.nrc.ca/sc2repo')
             self.storage_inventory_resource_id = config.get(
                 'storage_inventory_resource_id',
                 'ivo://cadc.nrc.ca/global/raven',
@@ -2285,6 +2307,20 @@ def compare_observations(actual_fqn, expected_fqn):
             f'{compare_text}'
         )
     return msg
+
+
+def compute_md5sum(fqn):
+    """
+    Gets the md5sum for a file on disk.
+    :param fqn: Fully-qualified name of the file on disk.
+    :return: str, no scheme on the md5sum value.
+    """
+    # copy and paste from cadcdata/storageinventory.py
+    hash_md5 = md5()
+    with open(fqn, 'rb') as f:
+        for chunk in iter(lambda: f.read(4096), b''):
+            hash_md5.update(chunk)
+    return hash_md5.hexdigest()
 
 
 def to_float(value):

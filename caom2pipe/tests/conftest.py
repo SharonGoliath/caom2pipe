@@ -53,3 +53,8 @@ def test_data_dir():
 @pytest.fixture(scope='function')
 def test_files_dir():
     return '/test_files'
+
+
+@pytest.fixture()
+def change_test_dir(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)

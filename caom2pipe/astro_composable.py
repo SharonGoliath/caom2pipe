@@ -241,6 +241,10 @@ def convert_time(start_time, exposure):
     return None, None
 
 
+def from_file_units_to_m(file_units, value):
+    from_unit = units.Unit(file_units)
+    return (value * from_unit).to(units.m, equivalencies=units.spectral()).value
+
 def get_datetime_mjd(from_value):
     """
     Ensure datetime values are in MJD.
@@ -582,7 +586,7 @@ class FilterMetadataCache:
 
 
 def is_good_date(
-    value, start_date, check_end_date=True, end_date=Time(dt_datetime.now(tz=timezone.utc), scale='utc')
+    value, start_date, check_end_date=False, end_date=Time(dt_datetime.now(tz=timezone.utc), scale='utc')
 ):
     """
     Check that dates exist within a range.

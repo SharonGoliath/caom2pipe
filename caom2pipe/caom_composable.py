@@ -73,7 +73,7 @@ import traceback
 from copy import deepcopy
 from datetime import datetime, timezone
 
-from caom2 import CoordAxis1D, Axis, RefCoord, CoordRange1D, SpectralWCS
+from caom2 import CoordAxis1D, Axis, RefCoord, CoordRange1D, Plane, SpectralWCS
 from caom2 import TypedSet, ObservationURI, PlaneURI, Chunk, CoordPolygon2D
 from caom2 import ValueCoord2D, Algorithm, Artifact, Part, TemporalWCS
 from caom2 import Instrument, TypedOrderedDict, SimpleObservation, CoordError
@@ -104,6 +104,7 @@ __all__ = [
     'copy_chunk',
     'copy_instrument',
     'copy_part',
+    'copy_plane',
     'copy_provenance',
     'do_something_to_chunks',
     'exec_footprintfinder',
@@ -117,6 +118,7 @@ __all__ = [
     'reset_energy',
     'reset_observable',
     'reset_position',
+    'reset_time',
     'TelescopeMapping',
     'undo_astropy_cdfix_call',
     'update_observation_members',
@@ -590,6 +592,29 @@ def copy_part(from_part, features=None):
     return copy
 
 
+def copy_plane(from_plane, new_product_id):
+    """Make a copy of a Plane instance, without the Artifacts.
+    :param from_plane Plane of which to make a shallow copy
+    :return a copy of the from_plane, with 0-length Artifacts
+    """
+    copy = Plane(
+        new_product_id,
+        creator_id=from_plane.creator_id,
+        artifacts=None,
+        meta_release=from_plane.meta_release,
+        data_release=from_plane.data_release,
+        meta_read_groups=from_plane.meta_read_groups,
+        data_read_groups=from_plane.data_read_groups,
+        data_product_type=from_plane.data_product_type,
+        calibration_level=from_plane.calibration_level,
+        provenance=from_plane.provenance,
+        metrics=from_plane.metrics,
+        quality=from_plane.quality,
+        observable=from_plane.observable,
+    )
+    return copy
+
+
 def copy_provenance(from_provenance):
     """Make a deep copy of a Provenance instance.
     :param from_provenance Provenance of which to make a shallow copy
@@ -1045,6 +1070,14 @@ def reset_observable(chunk):
     chunk.observable_axis = None
 
 
+def reset_time(chunk):
+    """
+    :param chunk: Set the temporal component of a chunk to None as a side-effect.
+    """
+    chunk.time = None
+    chunk.time_axis = None
+
+
 def undo_astropy_cdfix_call(chunk, time_delta):
     """
     undo the effects of the astropy cdfix call on a
@@ -1230,10 +1263,15 @@ class Fits2caom2Visitor:
                         )
                     else:
                         self._logger.debug('Build a DerivedObservation')
+                        algorithm_name =(
+                            'composite'
+                            if blueprint._get('Observation.algorithm.name') == 'exposure'
+                            else parser._get_from_list('Observation.algorithm.name', 0)
+                        )
                         self._observation = DerivedObservation(
                             collection=self._storage_name.collection,
                             observation_id=self._storage_name.obs_id,
-                            algorithm=Algorithm('composite'),
+                            algorithm=Algorithm(algorithm_name),
                         )
                     telescope_data.observation = self._observation
                 parser.augment_observation(

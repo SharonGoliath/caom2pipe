@@ -117,8 +117,8 @@ class StorageNameInstanceBuilder(StorageNameBuilder):
 
     def build(self, entry):
         return mc.StorageName(
-            obs_id=mc.StorageName.remove_extensions(entry),
-            file_name=entry,
+            obs_id=basename(mc.StorageName.remove_extensions(entry)),
+            file_name=basename(entry),
             source_names=[entry],
         )
 
@@ -167,4 +167,6 @@ class GuessingBuilder(StorageNameBuilder):
 
 
 def builder_factory(config):
-    return StorageNameInstanceBuilder(config)
+    result = StorageNameInstanceBuilder(config)
+    logging.debug(f'Create {result.__class__.__name__} builder')
+    return result

@@ -257,15 +257,19 @@ class IncrementalDataSource(DataSource):
         """
         Do what needs to be done to set end_dt for an incremental harvest.
         """
+        self._logger.debug('Begin initialize_end_dt')
         end_timestamp = self._state.bookmarks.get(self._start_key).get('end_timestamp')
         if end_timestamp is None:
             self._initialize_end_dt()
         else:
             self._end_dt = mc.make_datetime(end_timestamp)
+        self._logger.debug(f'End initialize_end_dt with {self._end_dt}')
 
     def initialize_start_dt(self):
+        self._logger.debug('Begin initialize_start_dt')
         self._state = mc.State(self._config.state_fqn, self._config.time_zone)
         self._start_dt = self._state.get_bookmark(self._start_key)
+        self._logger.debug(f'End initialize_start_dt with {self._start_dt}')
 
     def save_start_dt(self, value):
         self._state.save_state(self._start_key, value)
@@ -336,6 +340,8 @@ class ListDirSeparateDataSource(DataSource):
     This specialization is meant to imitate the behaviour of the original
     "ListDirDataSource", with different assumptions about which directories
     to use as a source of files, and how to identify files of interest.
+
+    This specialization makes minimalistic checking choices so large file sets aren't unbearably slow.
     """
 
     def __init__(self, config):
@@ -344,6 +350,14 @@ class ListDirSeparateDataSource(DataSource):
         self._extensions = config.data_source_extensions
         self._recursive = config.recurse_data_sources
         self._work = deque()
+
+    def default_filter(self, entry):
+        work_with_file = False
+        for extension in self._extensions:
+            if entry.name.endswith(extension):
+                work_with_file = True
+                break
+        return work_with_file
 
     def get_work(self):
         self._logger.debug(f'Begin get_work.')
@@ -360,13 +374,9 @@ class ListDirSeparateDataSource(DataSource):
                 if entry.is_dir() and self._recursive:
                     self._append_work(entry.path)
                 else:
-                    for extension in self._extensions:
-                        if entry.name.endswith(extension):
-                            self._logger.debug(
-                                f'Adding {entry.path} to work list.'
-                            )
-                            self._work.append(entry.path)
-                            break
+                    if self.default_filter(entry):
+                        self._logger.debug(f'Adding {entry.path} to work list.')
+                        self._work.append(entry.path)
 
 
 class ListDirTimeBoxDataSource(IncrementalDataSource):
@@ -748,7 +758,7 @@ class QueryTimeBoxDataSource(IncrementalDataSource):
         super().__init__(config, config.bookmark)
         self._preview_suffix = preview_suffix
         subject = clc.define_subject(config)
-        self._client = CadcTapClient(subject, resource_id=self._config.tap_id)
+        self._client = CadcTapClient(subject, resource_id=self._config.storage_inventory_tap_resource_id)
 
     def get_time_box_work(self, prev_exec_dt, exec_dt):
         """
@@ -1052,7 +1062,8 @@ def data_source_factory(config, clients, state, reader, reporter):
     :return: DataSource specialization
     """
     if config.use_local_files:
-        source = ListDirSeparateDataSource(config)
+        # by default call fitsverify as part of setting up local file use
+        source = LocalFilesDataSource(config, clients.data_client, reader, config.recurse_data_sources, config.scheme)
     else:
         if config.use_vos and clients.vo_client is not None:
             if config.cleanup_files_when_storing:

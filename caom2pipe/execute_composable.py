@@ -115,7 +115,6 @@ import logging
 import os
 import traceback
 
-from datetime import datetime, timezone
 from shutil import copyfileobj
 from urllib.parse import urlparse
 
@@ -124,7 +123,7 @@ from caom2pipe import client_composable as clc
 from caom2pipe import manage_composable as mc
 from caom2pipe import transfer_composable as tc
 
-__all__ = ['CaomExecute', 'can_use_single_visit', 'OrganizeExecutes', 'OrganizeChooser']
+__all__ = ['CaomExecute', 'OrganizeExecutes', 'OrganizeChooser']
 
 
 class CaomExecute:
@@ -814,7 +813,6 @@ class OrganizeExecutes:
         metadata_reader=None,
         clients=None,
         observable=None,
-        reporter=None,
     ):
         """
         Why there is support for two transfer instances:
@@ -837,7 +835,6 @@ class OrganizeExecutes:
         self.config = config
         self.chooser = chooser
         self.task_types = config.task_types
-        self._reporter = reporter
         self._observable = observable
         self._meta_visitors = meta_visitors
         self._data_visitors = data_visitors
@@ -849,6 +846,9 @@ class OrganizeExecutes:
         self._executors = []
         self._logger = logging.getLogger(self.__class__.__name__)
         self._logger.setLevel(config.logging_level)
+        self._choose()
+        if len(self._executors) == 0:
+            raise mc.CadcException(f'No executors. Will not continue.')
 
     def _clean_up_workspace(self, obs_id):
         """Remove a directory and all its contents. Only do this if there
@@ -918,14 +918,24 @@ class OrganizeExecutes:
             self._log_h.flush()
             self._log_h.close()
 
-    def choose(self):
+    def can_use_single_visit(self):
+        return (
+            len(self.task_types) > 1
+            and (
+                (mc.TaskType.STORE in self.task_types and mc.TaskType.INGEST in self.task_types)
+                or (mc.TaskType.INGEST in self.task_types and mc.TaskType.MODIFY in self.task_types)
+                or (mc.TaskType.SCRAPE in self.task_types and mc.TaskType.MODIFY in self.task_types)
+            )
+        )
+
+    def _choose(self):
         """The logic that decides which descendants of CaomExecute to
         instantiate. This is based on the content of the config.yml file
         for an application.
         :destination_name StorageName extension that handles the naming rules
             for a file.
         """
-        if can_use_single_visit(self.task_types):
+        if self.can_use_single_visit():
             if mc.TaskType.SCRAPE in self.task_types:
                 self._logger.debug(f'Choosing executor NoFheadSScrape for tasks {self.task_types}.')
                 self._executors.append(
@@ -1059,40 +1069,36 @@ class OrganizeExecutes:
         :param storage_name instance of StorageName for the collection
         """
         self._logger.debug(f'Begin do_one {storage_name}')
-        self._set_up_file_logging(storage_name)
-        start_s = datetime.now(tz=timezone.utc).timestamp()
-        try:
-            if self.is_rejected(storage_name):
-                self._reporter.capture_failure(storage_name, BaseException('StorageName.is_rejected'), 'Rejected')
-                # successful rejection of the execution case
-                result = 0
-            else:
-                self._create_workspace(storage_name.obs_id)
-                context = {'storage_name': storage_name}
-                for executor in self._executors:
-                    self._logger.info(
-                        f'Task with {executor.__class__.__name__} for '
-                        f'{storage_name.obs_id}'
-                    )
-                    executor.execute(context)
-                if len(self._executors) > 0:
-                    self._reporter.capture_success(storage_name.obs_id, storage_name.file_name, start_s)
+        result_message = None
+        if storage_name.is_valid():
+            self._set_up_file_logging(storage_name)
+            try:
+                if self.is_rejected(storage_name):
+                    # successful rejection of the execution case
                     result = 0
+                    result_message = 'Rejected'
                 else:
-                    self._logger.info(f'No executors for {storage_name}')
-                    # TODO
-                    result = -1  # cover case where file name validation fails
-        except Exception as e:
-            self._reporter.capture_failure(storage_name, e, traceback.format_exc())
-            self._logger.warning(
-                f'Execution failed for {storage_name.obs_id} with {e}'
-            )
-            self._logger.debug(traceback.format_exc())
+                    self._create_workspace(storage_name.obs_id)
+                    context = {'storage_name': storage_name}
+                    for executor in self._executors:
+                        self._logger.info(f'Task with {executor.__class__.__name__} for {storage_name.obs_id}')
+                        executor.execute(context)
+                    result = 0
+                    result_message = None
+            except Exception as e:
+                result_message = f'Execution failed for {storage_name.obs_id} with {e}'
+                self._logger.warning(result_message)
+                self._logger.debug(traceback.format_exc())
+                result = -1
+            finally:
+                self._clean_up_workspace(storage_name.obs_id)
+                self._unset_file_logging()
+        else:
+            self._logger.error(f'{storage_name.obs_id} failed naming validation check.')
             result = -1
-        finally:
-            self._clean_up_workspace(storage_name.obs_id)
-            self._unset_file_logging()
-        return result
+            result_message = 'Invalid name format'
+        self._logger.debug(f'Done do_one with result {result} and message {result_message}')
+        return result, result_message
 
 
 def decompressor_factory(config, working_directory, log_level_as, storage_name):
@@ -1211,14 +1217,3 @@ class FitsForCADCCompressor(FitsForCADCDecompressor):
                 returned_fqn = super().fix_compression(fqn)
                 # log message in the super
         return returned_fqn
-
-
-def can_use_single_visit(task_types):
-    return (
-        len(task_types) > 1
-        and (
-            (mc.TaskType.STORE in task_types and mc.TaskType.INGEST in task_types)
-            or (mc.TaskType.INGEST in task_types and mc.TaskType.MODIFY in task_types)
-            or (mc.TaskType.SCRAPE in task_types and mc.TaskType.MODIFY in task_types)
-        )
-    )
