@@ -123,7 +123,7 @@ from caom2pipe import client_composable as clc
 from caom2pipe import manage_composable as mc
 from caom2pipe import transfer_composable as tc
 
-__all__ = ['CaomExecute', 'OrganizeExecutes', 'OrganizeChooser']
+__all__ = ['can_use_single_visit', 'CaomExecute', 'OrganizeExecutes', 'OrganizeChooser']
 
 
 class CaomExecute:
@@ -919,14 +919,7 @@ class OrganizeExecutes:
             self._log_h.close()
 
     def can_use_single_visit(self):
-        return (
-            len(self.task_types) > 1
-            and (
-                (mc.TaskType.STORE in self.task_types and mc.TaskType.INGEST in self.task_types)
-                or (mc.TaskType.INGEST in self.task_types and mc.TaskType.MODIFY in self.task_types)
-                or (mc.TaskType.SCRAPE in self.task_types and mc.TaskType.MODIFY in self.task_types)
-            )
-        )
+        return can_use_single_visit(self.task_types)
 
     def _choose(self):
         """The logic that decides which descendants of CaomExecute to
@@ -1217,3 +1210,14 @@ class FitsForCADCCompressor(FitsForCADCDecompressor):
                 returned_fqn = super().fix_compression(fqn)
                 # log message in the super
         return returned_fqn
+
+
+def can_use_single_visit(task_types):
+    return (
+        len(task_types) > 1
+        and (
+            (mc.TaskType.STORE in task_types and mc.TaskType.INGEST in task_types)
+            or (mc.TaskType.INGEST in task_types and mc.TaskType.MODIFY in task_types)
+            or (mc.TaskType.SCRAPE in task_types and mc.TaskType.MODIFY in task_types)
+        )
+    )
