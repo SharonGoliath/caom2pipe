@@ -119,7 +119,7 @@ from datetime import datetime
 from shutil import copyfileobj
 from urllib.parse import urlparse
 
-from caom2utils.data_util import get_local_file_info
+from caom2utils.data_util import get_local_file_info, get_local_file_headers, get_local_headers_from_fits
 from caom2pipe import client_composable as clc
 from caom2pipe import manage_composable as mc
 from caom2pipe import transfer_composable as tc
@@ -1095,10 +1095,35 @@ class CaomExecuteRay(CaomExecute):
             clients=clients,
         )
 
+    def _visit_meta(self):
+        """Execute metadata-only visitors on an Observation in memory."""
+        if self.meta_visitors:
+            kwargs = {
+                'working_directory': self._working_dir,
+                'config': self._config,
+                'clients': self._clients,
+                'storage_name': self._storage_name,
+                'reporter': self._reporter,
+            }
+            for visitor in self.meta_visitors:
+                try:
+                    x = visitor(self._observation, **kwargs)
+                    self._observation = x.visit()
+                    if self._observation is None:
+                        msg = f'No Observation for {self._storage_name.file_uri}. Construction failed.'
+                        self._logger.error(f'Stopping _visit_meta with {msg}')
+                        raise mc.CadcException(msg)
+                except Exception as e:
+                    raise mc.CadcException(e)
+
+    def _set_preconditions(self):
+        raise NotImplementedError
+
     def execute(self, context):
         self._logger.debug('Begin execute')
         self._logger.debug('the steps:')
         self.storage_name = context.get('storage_name')
+        self._set_preconditions()
 
 
 class ScrapeRay(CaomExecuteRay):
@@ -1108,6 +1133,35 @@ class ScrapeRay(CaomExecuteRay):
 
     def __init__(self, config, meta_visitors, reporter):
         super().__init__(clients=None, config=config, meta_visitors=meta_visitors, reporter=reporter)
+
+    def _set_preconditions(self):
+        """This is probably not the best approach, but I want to think about where the optimal location for the
+        retrieve_file_info and retrieve_headers methods will be long-term. So, for the moment, use them here."""
+        for index, source_name in enumerate(self._storage_name.source_names):
+            uri = self._storage_name.destination_uris[index]
+            if uri not in self._storage_name.file_info.keys():
+                self._storage_name.file_info[uri] = get_local_file_info(source_name)
+            if uri not in self._storage_name.metadata.keys():
+                self._storage_name.metadata[uri] = []
+                if '.fits' in source_name:
+                    try:
+                        self._storage_name._metadata[uri] = get_local_headers_from_fits(source_name)
+                    except OSError as _:
+                        self._storage_name._metadata[uri] = get_local_file_headers(source_name)
+
+    def execute(self, context):
+        super().execute(context)
+
+        self._logger.debug('get observation for the existing model from disk')
+        self._read_model()
+
+        self._logger.debug('the metadata visitors')
+        self._visit_meta()
+
+        self._logger.debug('write the updated xml to disk for debugging')
+        self._write_model()
+
+        self._logger.debug(f'End execute')
 
 
 class OrganizeChooser:
@@ -1420,6 +1474,16 @@ class OrganizeExecutes:
         return result, result_message
 
 
+from dataclasses import dataclass
+
+@dataclass
+class ReturnValue:
+    result: bool
+    result_message: str
+    start_s: float
+    input_parameter: mc.StorageName
+
+
 class OrganizeExecutesRay(OrganizeExecutes):
     def __init__(self, config, data_visitors, meta_visitors, reporter):
         super().__init__(
@@ -1431,7 +1495,8 @@ class OrganizeExecutesRay(OrganizeExecutes):
             modify_transfer=None,
             metadata_reader=None,
             clients=None,
-            reporter=reporter,
+            reporter=reporter,  # TODO - remove, after you figure out how to remove it from "is_bad_metadata" call
+            # reporter=None,  # might need an Observer?
         )
 
     def _choose(self):
@@ -1563,6 +1628,41 @@ class OrganizeExecutesRay(OrganizeExecutes):
                 else:
                     raise mc.CadcException(f'Do not understand task type {task_type}')
 
+    def _set_up_file_logging(self, storage_name):
+        """Configure logging to a separate file for each entry being
+        processed.
+
+        If log_to_file is set to False, don't create a separate log file for
+        each entry, because the application should leave as small a logging
+        trace as possible.
+
+        """
+        if self._config.log_to_file:
+            log_fqn = os.path.join(
+                self._config.working_directory, storage_name.log_file
+            )
+            if self._config.log_file_directory is not None:
+                log_fqn = os.path.join(
+                    self._config.log_file_directory, storage_name.log_file
+                )
+            self._log_h = logging.FileHandler(log_fqn)
+            formatter = logging.Formatter(
+                '%(asctime)s:%(levelname)s:%(name)-12s:%(lineno)d:%(message)s'
+            )
+            self._log_h.setLevel(self._config.logging_level)
+            self._log_h.setFormatter(formatter)
+            logging.getLogger('ray').addHandler(self._log_h)
+            logging.getLogger().addHandler(self._log_h)
+
+    def _unset_file_logging(self):
+        """Turn off the logging to the separate file for each entry being
+        processed."""
+        if self._config.log_to_file:
+            logging.getLogger('ray').removeHandler(self._log_h)
+            logging.getLogger().removeHandler(self._log_h)
+            self._log_h.flush()
+            self._log_h.close()
+
     def do_one(self, storage_name):
         """Process one entry.
         :param storage_name instance of StorageName for the collection
@@ -1574,31 +1674,30 @@ class OrganizeExecutesRay(OrganizeExecutes):
             try:
                 if self.is_rejected(storage_name):
                     # successful rejection of the execution case
-                    result = 0
-                    self._reporter.capture_failure_2(storage_name._file_name, 'Rejected')
+                    result = True
+                    result_message = 'Rejected'
                 else:
                     self._create_workspace(storage_name.obs_id)
                     context = {'storage_name': storage_name}
                     for executor in self._executors:
                         self._logger.info(f'Task with {executor.__class__.__name__} for {storage_name.obs_id}')
                         executor.execute(context)
-                    result = 0
-                    self._reporter.capture_success(storage_name._obs_id, storage_name._file_name, start_s)
+                    result = True
+                    result_message = None
             except Exception as e:
                 result_message = f'Execution failed for {storage_name.obs_id} with {e}'
                 self._logger.warning(result_message)
                 self._logger.error(traceback.format_exc())
-                result = -1
-                self._reporter.capture_failure_2(storage_name._file_name, result_message)
+                result = False
             finally:
                 self._clean_up_workspace(storage_name.obs_id)
                 self._unset_file_logging()
         else:
             self._logger.error(f'{storage_name.obs_id} failed naming validation check.')
-            result = -1
-            self._reporter.capture_failure_2(storage_name._file_name, 'Invalid name format')
+            result = False
+            result_message = 'Invalid name format'
         self._logger.debug(f'Done do_one with result {result}')
-        return result
+        return ReturnValue(result, result_message, start_s, storage_name)
 
 
 class OrganizeWithContext(OrganizeExecutes):

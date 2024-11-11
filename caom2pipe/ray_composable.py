@@ -76,18 +76,23 @@ from os.path import basename, join
 
 from caom2utils.data_util import get_local_file_headers, get_local_file_info
 from caom2pipe.astro_composable import check_fitsverify
-from caom2pipe.data_source_composable import ListDirSeparateDataSource
+from caom2pipe.data_source_composable import ListDirSeparateDataSource, ListDirTimeBoxDataSourceRay
 from caom2pipe.execute_composable import OrganizeExecutesRay
 from caom2pipe.manage_composable import Config, create_dir, exec_cmd, ExecutionReporterRay, increment_time, StateRay
 from caom2pipe.manage_composable import StorageName
 from caom2pipe.run_composable import TodoRunner
 
 
-# @ray.remote
+@ray.remote
 def do_one_ray(entry, organizer):
     result = None
     try:
-        result = organizer.do_one(entry)
+        storage_name = entry.storage_entry
+        storage_name.collection = organizer._config.collection
+        storage_name.data_source_extensions = organizer._config.data_source_extensions
+        storage_name.preview_scheme = organizer._config.preview_scheme
+        storage_name.scheme = organizer._config.scheme
+        result = organizer.do_one(storage_name)
     except Exception as e:
         logging.error(e)
         logging.error(traceback.format_exc())
@@ -97,8 +102,9 @@ def do_one_ray(entry, organizer):
 
 class Y(StorageName):
 
-    def __init__(self, source_names):
-        super().__init__(file_name=basename(source_names[0]), source_names=source_names)
+    def __init__(self, entry, entry_dt):
+        super().__init__(file_name=basename(entry), source_names=[entry])
+        self._entry_dt = entry_dt
 
     def set_file_id(self, **kwargs):
         self._file_id = basename(StorageName.remove_extensions(self._source_names[0]))
@@ -207,6 +213,72 @@ class RayTodoRunner(TodoRunner):
         return result
 
 
+class RayTodoRunnerIncremental(TodoRunner):
+
+    def __init__(self, config, organizer, reporter, start_dt, end_dt, data_source_key):
+        # TODO - need to clean up the staging directories created here?
+        self._stager = ListDirTimeBoxDataSourceRay(config, reporter, data_source_key, Y)
+        super().__init__(
+            config=config,
+            organizer=organizer,
+            builder=None,
+            data_sources=[self._stager],
+            metadata_reader=None,
+            reporter=reporter,
+        )
+        self._start_dt = start_dt
+        self._end_dt = end_dt
+        # TODO - working directory
+        # self._label = (
+        #     f'{start_dt.isoformat().replace(":", "_").replace(".", "_")}_'
+        #     f'{end_dt.isoformat().replace(":", "_").replace(".", "_")}'
+        # )
+        # self._working_directory = join(config.working_directory, self._label)
+        # create_dir(self._working_directory)
+        self._entries = []
+
+    @property
+    def num_entries(self):
+        return self._num_entries
+
+    def _build_todo_list(self, data_source):
+        self._logger.debug('Begin _build_todo_list')
+        self._entries = self._stager.get_time_box_work(self._start_dt, self._end_dt)
+        self._num_entries = len(self._entries)
+        self._logger.debug('End _build_todo_list')
+
+    def _process_entry(self):
+        raise NotImplementedError
+
+    def _run_todo_list(self, data_source, current_count):
+        self._logger.error('Begin _run_todo_list')
+        result = 0
+        organizer_ref = ray.put(self._organizer)
+        entry_references = [ray.put(entry) for entry in self._entries]
+        execution_references = [do_one_ray.remote(entry_ref, organizer_ref) for entry_ref in entry_references]
+        # from anti-pattern https://docs.ray.io/en/latest/ray-core/patterns/ray-get-submission-order.html
+        unfinished = execution_references
+        while unfinished:
+            # returns the first ObjectRef that is ready - processes the results in completion order
+            finished, unfinished = ray.wait(unfinished, num_returns=1)
+            # call ray.get as late as possible
+            return_value = ray.get(finished[0])
+            self._logger.error(
+                f'result is {return_value.result} for reference {finished[0]} {return_value.start_s} '
+                f'{return_value.input_parameter}'
+            )
+            if return_value.result:
+                self._reporter.capture_success(
+                    return_value.input_parameter.obs_id, return_value.input_parameter.file_name, return_value.start_s
+                )
+            else:
+                self._reporter.capture_failure_2(return_value.input_parameter._file_name, return_value.result_message)
+            result |= return_value.result
+
+        self._logger.debug('End _run_todo_list')
+        return result
+
+
 class StateRunnerNoRemoteReaderNoDataSource(TodoRunner):
     """This Runner will stage data from a remote location, and then execute ingestion from the staging location."""
 
@@ -227,10 +299,10 @@ class StateRunnerNoRemoteReaderNoDataSource(TodoRunner):
         self._logger.debug('Begin run')
         state = StateRay()
         state.read_from_file(self._config.state_fqn)
-        for data_source in self._config.data_sources:
-            self._logger.info(f'Begin run for data source {data_source}')
-            start_dt = state.get_bookmark_start(data_source)
-            end_dt = state.get_bookmark_end(data_source)
+        for data_source_key in self._config.data_sources:
+            self._logger.info(f'Begin run for data source {data_source_key}')
+            start_dt = state.get_bookmark_start(data_source_key)
+            end_dt = state.get_bookmark_end(data_source_key)
 
             prev_exec_time = start_dt
             incremented = increment_time(prev_exec_time, self._config.interval)
@@ -245,15 +317,18 @@ class StateRunnerNoRemoteReaderNoDataSource(TodoRunner):
                 cumulative = 0
                 result = 0
                 while exec_time <= end_dt:
-                    self._logger.info(f'Processing {data_source} from {prev_exec_time} to {exec_time}')
+                    self._logger.info(f'Processing {data_source_key} from {prev_exec_time} to {exec_time}')
                     save_time = exec_time
-                    runner = RayTodoRunner(
-                        self._config, self._organizer, self._reporter, prev_exec_time, exec_time, data_source
+                    # runner = RayTodoRunner(
+                    #     self._config, self._organizer, self._reporter, prev_exec_time, exec_time, data_source
+                    # )
+                    runner = RayTodoRunnerIncremental(
+                        self._config, self._organizer, self._reporter, prev_exec_time, exec_time, data_source_key
                     )
                     runner.run()
                     # self._record_progress(num_entries, cumulative, prev_exec_time, save_time)
                     cumulative += self._record_progress(runner, cumulative, prev_exec_time, save_time)
-                    state.save_start_dt(data_source, save_time, self._config.state_fqn)
+                    state.save_start_dt(data_source_key, save_time, self._config.state_fqn)
 
                     if exec_time == end_dt:
                         # the last interval will always have the exec time
@@ -271,9 +346,9 @@ class StateRunnerNoRemoteReaderNoDataSource(TodoRunner):
                     # TODO the real time to store is going to be the runner.max_dt - how to find that,
                     # how to reference it, etc
 
-            state.save_start_dt(data_source, exec_time, self._config.state_fqn)
-            self._end_message(data_source, exec_time)
-            self._logger.debug(f'End run for data source {data_source} with result {result}')
+            state.save_start_dt(data_source_key, exec_time, self._config.state_fqn)
+            self._end_message(data_source_key, exec_time)
+            self._logger.debug(f'End run for data source {data_source_key} with result {result}')
         self._logger.debug('End run')
         return result
 
@@ -303,4 +378,23 @@ def ray_execution(data_visitors, meta_visitors):
         organizer=organizer,
         reporter=reporter,
     )
-    return runner.run()
+    result = runner.run()
+    runner.report()
+    return result
+
+
+def ray_execution_listdir_timebox(data_visitors, meta_visitors):
+    config = Config()
+    config.get_executors()
+    ray.init(logging_config=ray.LoggingConfig(log_level=config.logging_level))
+    reporter = ExecutionReporterRay(config)
+    organizer = OrganizeExecutesRay(config, data_visitors, meta_visitors, reporter)
+    # the "NoDataSource" might work here, because it's a SCRAPE TaskType
+    runner = StateRunnerNoRemoteReaderNoDataSource(
+        config=config,
+        organizer=organizer,
+        reporter=reporter,
+    )
+    result = runner.run()
+    runner.report()
+    return result

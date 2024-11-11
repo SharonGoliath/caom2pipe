@@ -2319,6 +2319,16 @@ class StorageName:
     - source_names: fully-qualified name of a file at it's source, if required.
       This may be a Linux directory+file name, and HTTP URL, or an IVOA Virtual
       Storage URI.
+    - metadata associated with an instance. The is perhaps temporal in nature, and maybe there should be an
+      uber-class to capture the relationship between the naming rules and the metadata, instead of shoe-horning
+      those two concepts together here?  TODO - decide whether an uber-class is required?
+
+    Lifecycle of a StorageName
+       1. Created when a unit of work is identified
+       2. FileInfo - as lazy as possible
+       3. Header metadata - as lazy as possible
+       4. Removed from the list of work when it’s (successfully? TODO - decide the optimal removal time ) done
+          processing
     """
 
     # string value for Observation.collection
@@ -2356,8 +2366,10 @@ class StorageName:
         self._destination_uris = []
         # str - the file name with all file type and compression extensions removed
         self._file_id = None
-        self._metadata = None
-        self._file_info = None
+        # key is destination uri, value is file metadata, such as fits headers, db record, etc
+        self._metadata = {}
+        # key is destination uri, value is type FileInfo
+        self._file_info = {}
         self._logger = logging.getLogger(self.__class__.__name__)
         self.set_destination_uris()
         self.set_file_id()
@@ -2366,6 +2378,8 @@ class StorageName:
         self._logger.debug(self)
 
     def __str__(self):
+        f_info_keys = '\n                  '.join(ii for ii in self.file_info.keys())
+        metadata_keys = '\n                  '.join(ii for ii in self.metadata.keys())
         return (
             f'\n'
             f'          obs_id: {self.obs_id}\n'
@@ -2374,8 +2388,8 @@ class StorageName:
             f'       file_name: {self.file_name}\n'
             f'    source_names: {self.source_names}\n'
             f'destination_uris: {self.destination_uris}\n'
-            f'       file_info: {self.file_info}\n'
-            f'   len(metadata): {str(len(self.metadata)) if self.metadata else "0"}'
+            f'       file_info: {f_info_keys}\n'
+            f'   len(metadata): {metadata_keys}'
         )
 
     def _get_uri(self, file_name, scheme):

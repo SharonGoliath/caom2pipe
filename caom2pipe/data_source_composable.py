@@ -458,6 +458,55 @@ class ListDirTimeBoxDataSource(IncrementalDataSource):
                             self._logger.debug(f'Adding {entry.path}')
 
 
+class ListDirTimeBoxDataSourceRay(ListDirTimeBoxDataSource):
+    """"""
+
+    def __init__(self, config, reporter, data_source_key, storage_name_type):
+        super().__init__(config)
+        self._reporter = reporter
+        self._source_directories = [data_source_key]
+        self._storage_name_type = storage_name_type
+
+    def get_time_box_work(self, prev_exec_dt, exec_dt):
+        """
+        :param prev_exec_dt tz-naive datetime start of the time-boxed chunk
+        :param exec_dt tz-naive datetime end of the time-goxed chunk
+        :return: a deque of StorageName instances, with prev_exec_time <= os.stat.mtime <= exec_time, and sorted by
+            os.stat.mtime
+        """
+        self._logger.debug(f'Begin get_time_box_work from {prev_exec_dt} to {exec_dt}.')
+        for source in self._source_directories:
+            self._logger.debug(f'Looking for work in {source}')
+            self._append_work(prev_exec_dt, exec_dt, source)
+        # ensure the result returned is sorted by timestamp in ascending order
+        for mtime in sorted(self._temp):
+            for entry in self._temp[mtime]:
+                self._work.append(RunnerMeta(storage_entry=entry, entry_dt=mtime))
+        self._temp = defaultdict(list)
+        self._capture_todo()
+        self._logger.debug('End get_time_box_work')
+        return self._work
+
+    def _append_work(self, prev_exec_dt, exec_dt, entry_path):
+        with os.scandir(entry_path) as dir_listing:
+            for entry in dir_listing:
+                # the slowest thing to do is the 'stat' call, so delay it as
+                # long as possible, and only if necessary
+                if entry.is_dir() and self._recursive:
+                    entry_stats = entry.stat()
+                    entry_st_mtime_dt = mc.make_datetime(entry_stats.st_mtime)
+                    if exec_dt >= entry_st_mtime_dt >= prev_exec_dt:
+                        self._append_work(prev_exec_dt, exec_dt, entry.path)
+                else:
+                    # send the dir_listing value
+                    if self.default_filter(entry):
+                        entry_stats = entry.stat()
+                        entry_st_mtime_dt = mc.make_datetime(entry_stats.st_mtime)
+                        if exec_dt >= entry_st_mtime_dt >= prev_exec_dt:
+                            self._temp[entry_st_mtime_dt].append(self._storage_name_type(entry.path, entry_st_mtime_dt))
+                            self._logger.debug(f'Adding {entry.path}')
+
+
 class LocalFilesDataSource(ListDirTimeBoxDataSource):
     """
     For when use_local_files: True and cleanup_when_storing: True
@@ -824,6 +873,14 @@ class StateRunnerMeta:
     # how to refer to the item of work to be processed
     entry_name: str
     # offset-aware datetime associated with item of work
+    entry_dt: datetime
+
+
+@dataclass
+class RunnerMeta:
+    # how to refer to the item of work to be processed
+    storage_entry: mc.StorageName
+    # tz-naive datetime associated with item of work
     entry_dt: datetime
 
 

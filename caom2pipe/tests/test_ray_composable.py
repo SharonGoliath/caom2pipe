@@ -69,15 +69,59 @@
 from datetime import datetime
 from shutil import copyfile
 
-from caom2pipe.caom_composable import Fits2caom2Visitor
-from caom2pipe.manage_composable import StateRay, TaskType
-from caom2pipe.ray_composable import ray_execution
+from caom2pipe.caom_composable import Fits2caom2VisitorRay
+from caom2pipe.manage_composable import ExecutionSummary, StateRay, TaskType
+from caom2pipe.ray_composable import ray_execution, ray_execution_listdir_timebox
 
 from unittest.mock import patch
 
+@patch('caom2pipe.client_composable.ClientCollection')
+def test_nominal_ray_execution_listdir_timebox_datasource(
+    clients_mock, test_data_dir, test_config, tmp_path, change_test_dir
+):
+    import logging
+    # logging.getLogger().setLevel(logging.DEBUG)
+    test_config.change_working_directory(tmp_path)
+    test_config.task_types = [TaskType.SCRAPE]
+    test_config.data_sources = ['/test_files']
+    test_config.recurse_data_sources = False
+    test_config.rclone_options = None
+    test_config.interval = 1200
+    test_config.use_local_files = True
+    test_config.log_to_file = True
+    test_config.logging_level = 'DEBUG'
+    test_config.write_to_file(test_config)
+    with open(test_config.proxy_file_name, 'w') as f:
+        f.write('test content')
+
+    state_ray = StateRay()
+    test_start_time = datetime(2022, 9, 19, 1, 1, 1)
+    test_end_time = datetime(2022, 9, 21, 2, 2, 2)
+    state_ray.add_bookmark_start(test_config.data_sources[0], test_start_time)
+    state_ray.add_bookmark_end(test_config.data_sources[0], test_end_time)
+    state_ray.write_content(test_config.state_fqn)
+
+    test_data_visitors = []
+    test_meta_visitors = [Fits2caom2VisitorRay]
+    test_result = ray_execution_listdir_timebox(test_data_visitors, test_meta_visitors)
+    assert test_result is not None, 'expect a result'
+    assert test_result == 0, 'expect success'
+    test_report = ExecutionSummary.read_report_file(test_config.report_fqn)
+    assert test_report is not None, 'expect a report'
+    assert test_report.entries == 3, f'wrong entries {test_report}'
+    assert test_report._errors_sum == 0, f'wrong errors {test_report}'
+    assert test_report._rejected_sum == 0, f'wrong rejected {test_report}'
+    assert test_report._retry_sum == 0, f'wrong retries {test_report}'
+    assert test_report.success == 3, f'wrong success {test_report}'
+    assert test_report._skipped_sum == 0, f'wrong skipped {test_report}'
+    assert test_report._timeouts_sum == 0, f'wrong timeouts {test_report}'
+
+
 @patch('caom2pipe.ray_composable.exec_cmd')
 @patch('caom2pipe.client_composable.ClientCollection')
-def test_nominal_ray_execution(clients_mock, exec_cmd_mock, test_data_dir, test_config, tmp_path, change_test_dir):
+def test_nominal_ray_execution_with_rclone(
+    clients_mock, exec_cmd_mock, test_data_dir, test_config, tmp_path, change_test_dir
+):
     import logging
     logging.getLogger().setLevel(logging.DEBUG)
     test_config.change_working_directory(tmp_path)
@@ -112,7 +156,7 @@ def test_nominal_ray_execution(clients_mock, exec_cmd_mock, test_data_dir, test_
     exec_cmd_mock.side_effect = _exec_mock
 
     test_data_visitors = []
-    test_meta_visitors = [Fits2caom2Visitor]
+    test_meta_visitors = [Fits2caom2VisitorRay]
     test_result = ray_execution(test_data_visitors, test_meta_visitors)
     assert test_result is not None, 'expect a result'
     assert test_result == 0, 'expect success'
