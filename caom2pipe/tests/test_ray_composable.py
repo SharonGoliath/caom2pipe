@@ -89,7 +89,7 @@ def test_nominal_ray_execution_listdir_timebox_datasource(
     test_config.interval = 1200
     test_config.use_local_files = True
     test_config.log_to_file = True
-    test_config.logging_level = 'DEBUG'
+    test_config.logging_level = 'INFO'
     test_config.write_to_file(test_config)
     with open(test_config.proxy_file_name, 'w') as f:
         f.write('test content')
@@ -97,6 +97,50 @@ def test_nominal_ray_execution_listdir_timebox_datasource(
     state_ray = StateRay()
     test_start_time = datetime(2022, 9, 19, 1, 1, 1)
     test_end_time = datetime(2022, 9, 21, 2, 2, 2)
+    state_ray.add_bookmark_start(test_config.data_sources[0], test_start_time)
+    state_ray.add_bookmark_end(test_config.data_sources[0], test_end_time)
+    state_ray.write_content(test_config.state_fqn)
+
+    test_data_visitors = []
+    test_meta_visitors = [Fits2caom2VisitorRay]
+    test_result = ray_execution_listdir_timebox(test_data_visitors, test_meta_visitors)
+    assert test_result is not None, 'expect a result'
+    assert test_result == 0, 'expect success'
+    test_report = ExecutionSummary.read_report_file(test_config.report_fqn)
+    assert test_report is not None, 'expect a report'
+    assert test_report.entries == 3, f'wrong entries {test_report}'
+    assert test_report._errors_sum == 0, f'wrong errors {test_report}'
+    assert test_report._rejected_sum == 0, f'wrong rejected {test_report}'
+    assert test_report._retry_sum == 0, f'wrong retries {test_report}'
+    assert test_report.success == 3, f'wrong success {test_report}'
+    assert test_report._skipped_sum == 0, f'wrong skipped {test_report}'
+    assert test_report._timeouts_sum == 0, f'wrong timeouts {test_report}'
+    assert False
+
+
+def test_retries_nominal_ray_execution_listdir_timebox_datasource(
+    test_data_dir, test_config, tmp_path, change_test_dir
+):
+    import logging
+    # logging.getLogger().setLevel(logging.DEBUG)
+    test_config.change_working_directory(tmp_path)
+    test_config.task_types = [TaskType.SCRAPE]
+    # will this file cause a retry? No
+    # test_config.data_sources = ['/test_files/sub_directory_broken']
+    test_config.data_sources = ['/test_files/sub_directory']
+    test_config.recurse_data_sources = False
+    test_config.rclone_options = None
+    test_config.interval = 1200
+    test_config.use_local_files = True
+    test_config.log_to_file = True
+    test_config.logging_level = 'INFO'
+    test_config.write_to_file(test_config)
+    with open(test_config.proxy_file_name, 'w') as f:
+        f.write('test content')
+
+    state_ray = StateRay()
+    test_start_time = datetime(2021, 4, 29, 0, 0, 0)
+    test_end_time = datetime(2021, 4, 30, 0, 0, 0)
     state_ray.add_bookmark_start(test_config.data_sources[0], test_start_time)
     state_ray.add_bookmark_end(test_config.data_sources[0], test_end_time)
     state_ray.write_content(test_config.state_fqn)

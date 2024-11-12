@@ -77,7 +77,7 @@ from os.path import basename, join
 from caom2utils.data_util import get_local_file_headers, get_local_file_info
 from caom2pipe.astro_composable import check_fitsverify
 from caom2pipe.data_source_composable import ListDirSeparateDataSource, ListDirTimeBoxDataSourceRay
-from caom2pipe.execute_composable import OrganizeExecutesRay
+from caom2pipe.execute_composable import OrganizeExecutesRay, ReturnValue
 from caom2pipe.manage_composable import Config, create_dir, exec_cmd, ExecutionReporterRay, increment_time, StateRay
 from caom2pipe.manage_composable import StorageName
 from caom2pipe.run_composable import TodoRunner
@@ -85,19 +85,23 @@ from caom2pipe.run_composable import TodoRunner
 
 @ray.remote
 def do_one_ray(entry, organizer):
-    result = None
+    return_value = None
     try:
         storage_name = entry.storage_entry
         storage_name.collection = organizer._config.collection
         storage_name.data_source_extensions = organizer._config.data_source_extensions
         storage_name.preview_scheme = organizer._config.preview_scheme
         storage_name.scheme = organizer._config.scheme
-        result = organizer.do_one(storage_name)
+        return_value = organizer.do_one(storage_name)
+        return_value.input_parameter = entry
     except Exception as e:
         logging.error(e)
         logging.error(traceback.format_exc())
-        result = -1
-    return result
+        if return_value is not None:
+            return_value.result = False
+        else:
+            return_value = ReturnValue(False, str(e),  0.0, entry)
+    return return_value
 
 
 class Y(StorageName):
@@ -251,6 +255,8 @@ class RayTodoRunnerIncremental(TodoRunner):
         raise NotImplementedError
 
     def _run_todo_list(self, data_source, current_count):
+        """Using tasks because the ray docs say 'tasks are scheduled more flexibly, and if you don’t need the
+        stateful part of an actor, you’re mostly better off using tasks'"""
         self._logger.error('Begin _run_todo_list')
         result = 0
         organizer_ref = ray.put(self._organizer)
@@ -269,12 +275,20 @@ class RayTodoRunnerIncremental(TodoRunner):
             )
             if return_value.result:
                 self._reporter.capture_success(
-                    return_value.input_parameter.obs_id, return_value.input_parameter.file_name, return_value.start_s
+                    return_value.input_parameter.storage_entry.obs_id,
+                    return_value.input_parameter.storage_entry.file_name,
+                    return_value.start_s,
                 )
+                self._logger.error(return_value.input_parameter)
+                self._entries.remove(return_value.input_parameter)
             else:
-                self._reporter.capture_failure_2(return_value.input_parameter._file_name, return_value.result_message)
+                self._reporter.capture_failure_2(
+                    return_value.input_parameter.storage_entry.file_name,
+                    return_value.result_message,
+                )
             result |= return_value.result
 
+        self._finish_run()
         self._logger.debug('End _run_todo_list')
         return result
 
