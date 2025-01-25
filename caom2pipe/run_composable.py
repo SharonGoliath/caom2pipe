@@ -259,11 +259,11 @@ class TodoRunnerMeta(TodoRunner):
             reporter,
         )
 
-    def _process_entry(self, storage_name):
+    async def _process_entry(self, storage_name):
         self._logger.debug(f'Begin _process_entry for {storage_name.file_uri}.')
         try:
             start_s = datetime.now(tz=timezone.utc).timestamp()
-            result, result_message = self._organizer.do_one(storage_name)
+            result, result_message = await self._organizer.do_one(storage_name)
             if result == 0 and result_message is None:
                 self._reporter.capture_success(storage_name.obs_id, storage_name.file_name, start_s)
             elif result == -1 and not result_message.startswith('No executors'):
@@ -286,7 +286,7 @@ class TodoRunnerMeta(TodoRunner):
         # self._retry_data_source.reporter = self._reporter
         # self._retry_data_source.clean_up = data_source.clean_up
 
-    def _run_todo_list(self, data_source, current_count):
+    async def _run_todo_list(self, data_source, current_count):
         """
         :param current_count: int - current retry count - needs to be passed
             to _process_entry.
@@ -296,7 +296,7 @@ class TodoRunnerMeta(TodoRunner):
         retry_list = deque()
         while len(self._todo_list) > 0:
             entry = self._todo_list.popleft()
-            temp_result = self._process_entry(entry)
+            temp_result = await self._process_entry(entry)
             result |= temp_result
             try:
                 can_clean_up = data_source.clean_up(entry, temp_result, current_count)
@@ -311,7 +311,7 @@ class TodoRunnerMeta(TodoRunner):
         self._todo_list = retry_list
         return result
 
-    def run_retry(self):
+    async def run_retry(self):
         self._logger.debug('Begin retry run.')
         result = 0
         # if self._config.need_to_retry():
@@ -329,7 +329,7 @@ class TodoRunnerMeta(TodoRunner):
                 self._logger.warning(f'Retry {len(self._todo_list)} entries at {decay_interval} seconds from now.')
                 sleep(decay_interval)
                 # result |= self._run_todo_list(self._retry_data_source, current_count=count + 1)
-                result |= self._run_todo_list(self._data_sources[0], current_count=count + 1)
+                result |= await self._run_todo_list(self._data_sources[0], current_count=count + 1)
                 # if not self._config.need_to_retry():
                 if len(self._todo_list) == 0:
                     break
@@ -337,6 +337,15 @@ class TodoRunnerMeta(TodoRunner):
         else:
             self._logger.info(f'No failures to be retried.')
         self._logger.debug(f'End retry run with result {result}.')
+        return result
+
+    async def run(self):
+        self._logger.debug('Begin run.')
+        result = 0
+        for data_source in self._data_sources:
+            self._build_todo_list(data_source)
+            result |= await self._run_todo_list(data_source, current_count=0)
+        self._logger.debug('End run.')
         return result
 
 
@@ -1007,7 +1016,7 @@ def run_by_state(
     return result
 
 
-def run_by_todo_runner_meta(
+async def run_by_todo_runner_meta(
     config=None,
     sources=None,
     meta_visitors=None,
@@ -1065,8 +1074,8 @@ def run_by_todo_runner_meta(
     )
 
     runner = TodoRunnerMeta(config, data_sources, organizer, reporter)
-    result = runner.run()
-    result |= runner.run_retry()
+    result = await runner.run()
+    result |= await runner.run_retry()
     runner.report()
     return result
 

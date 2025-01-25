@@ -364,6 +364,49 @@ class CaomExecuteRunnerMeta(CaomExecute):
             interim_file_info = get_local_file_info(interim_fqn)
             self._storage_name.file_info[uri] = interim_file_info
 
+    async def _caom2_read(self):
+        """Retrieve the existing observation model metadata."""
+        self._observation = await clc.repo_get(
+            self.caom_repo_client,
+            self._storage_name.collection,
+            self._storage_name.obs_id,
+            self.observable.metrics,
+        )
+        self._caom2_update_needed = False if self._observation is None else True
+        if self._caom2_update_needed:
+            self._logger.debug(f'Found observation {self._observation.observation_id}')
+
+    async def _caom2_store(self):
+        """Update an existing observation instance.  Assumes the obs_id
+        values are set correctly."""
+        if self._caom2_update_needed:
+            await clc.repo_update(
+                self.caom_repo_client,
+                self._observation,
+                self.observable.metrics,
+            )
+        else:
+            await clc.repo_create(
+                self.caom_repo_client,
+                self._observation,
+                self.observable.metrics,
+            )
+
+    async def _caom2_delete_create(self):
+        """Delete an observation instance based on an input parameter."""
+        if self._caom2_update_needed:
+            await clc.repo_delete(
+                self.caom_repo_client,
+                self._observation.collection,
+                self._observation.observation_id,
+                self.observable.metrics,
+            )
+        await clc.repo_create(
+            self.caom_repo_client,
+            self._observation,
+            self.observable.metrics,
+        )
+
     def _set_preconditions(self):
         """The default preconditions are ensuring that the StorageName instance from the 'context' parameter has
         both the metadata and file_info members initialized correctly. For the default case assume the files are
@@ -403,7 +446,7 @@ class CaomExecuteRunnerMeta(CaomExecute):
                     self._logger.error(f'Stopping _visit_meta with {msg}')
                     raise mc.CadcException(msg)
 
-    def execute(self, context):
+    async def execute(self, context):
         self._logger.debug('Begin execute with the steps:')
         self.storage_name = context.get('storage_name')
 
@@ -584,11 +627,11 @@ class MetaVisitRunnerMeta(CaomExecuteRunnerMeta):
                 if '.fits' in source_name:
                     self._storage_name._metadata[uri] = self._clients.data_client.get_head(uri)
 
-    def execute(self, context):
+    async def execute(self, context):
         super().execute(context)
 
         self._logger.debug('retrieve the observation if it exists')
-        self._caom2_read()
+        await self._caom2_read()
 
         self._logger.debug('the metadata visitors')
         self._visit_meta()
@@ -597,7 +640,7 @@ class MetaVisitRunnerMeta(CaomExecuteRunnerMeta):
         self._write_model()
 
         self._logger.debug('store the xml')
-        self._caom2_store()
+        await self._caom2_store()
 
         self._logger.debug('End execute')
 
@@ -1680,6 +1723,42 @@ class OrganizeExecutesRunnerMeta(OrganizeExecutes):
                     pass
                 else:
                     raise mc.CadcException(f'Do not understand task type {task_type}')
+
+    async def do_one(self, storage_name):
+        """Process one entry.
+        :param storage_name instance of StorageName for the collection
+        """
+        self._logger.debug(f'Begin do_one {storage_name}')
+        result_message = None
+        if storage_name.is_valid():
+            self._set_up_file_logging(storage_name)
+            try:
+                if self.is_rejected(storage_name):
+                    # successful rejection of the execution case
+                    result = 0
+                    result_message = 'Rejected'
+                else:
+                    self._create_workspace(storage_name.name)
+                    context = {'storage_name': storage_name}
+                    for executor in self._executors:
+                        self._logger.info(f'Task with {executor.__class__.__name__} for {storage_name.name}')
+                        await executor.execute(context)
+                    result = 0
+                    result_message = None
+            except Exception as e:
+                result_message = f'Execution failed for {storage_name.name} with {e}'
+                self._logger.warning(result_message)
+                self._logger.debug(traceback.format_exc())
+                result = -1
+            finally:
+                self._clean_up_workspace(storage_name.name)
+                self._unset_file_logging()
+        else:
+            self._logger.error(f'{storage_name.name} failed naming validation check.')
+            result = -1
+            result_message = 'Invalid name format'
+        self._logger.debug(f'Done do_one with result {result} and message {result_message}')
+        return result, result_message
 
 
 def decompressor_factory(config, working_directory, log_level_as, storage_name):
