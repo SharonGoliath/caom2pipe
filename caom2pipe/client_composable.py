@@ -143,7 +143,7 @@ class ClientCollection:
         self._metrics = None
         self._subject = None
         self._logger = logging.getLogger(self.__class__.__name__)
-        self._init(config)
+        # self._init(config)
 
     @property
     def data_client(self):
@@ -179,12 +179,13 @@ class ClientCollection:
     def vo_client(self, value):
         self._vo_client = value
 
-    def _init(self, config):
+    async def _init(self, config):
         if mc.TaskType.SCRAPE in config.task_types:
             self._logger.info(f'SCRAPE\'ing data - no clients will be initialized.')
         else:
             self._subject = define_subject(config)
             self._metadata_client = CAOM2RepoClient(self._subject, config.logging_level, config.resource_id)
+            await self._metadata_client._init()
             self._data_client = declare_client(config)
             if config.tap_id is not None:
                 self._query_client = CadcTapClient(subject=self._subject, resource_id=config.tap_id)
