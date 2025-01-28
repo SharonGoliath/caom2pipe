@@ -451,7 +451,7 @@ class CaomExecuteRunnerMeta(CaomExecute):
         self.storage_name = context.get('storage_name')
 
         self._logger.debug('initialize the metadata')
-        self._set_preconditions()
+        await self._set_preconditions()
 
 
 class MetaVisitDeleteCreate(CaomExecute):
@@ -628,7 +628,7 @@ class MetaVisitRunnerMeta(CaomExecuteRunnerMeta):
                     self._storage_name._metadata[uri] = self._clients.data_client.get_head(uri)
 
     async def execute(self, context):
-        super().execute(context)
+        await super().execute(context)
 
         self._logger.debug('retrieve the observation if it exists')
         await self._caom2_read()

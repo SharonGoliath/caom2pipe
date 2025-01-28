@@ -186,12 +186,16 @@ class ClientCollection:
             self._subject = define_subject(config)
             self._metadata_client = CAOM2RepoClient(self._subject, config.logging_level, config.resource_id)
             await self._metadata_client._init()
-            self._data_client = declare_client(config)
+            self._data_client = await declare_client(config)
             if config.tap_id is not None:
                 self._query_client = CadcTapClient(subject=self._subject, resource_id=config.tap_id)
+                await self._query_client._init(config.tap_id, self._subject, insecure=False)
             if config.storage_inventory_tap_resource_id is not None:
                 self._storage_query_client = CadcTapClient(
                     subject=self._subject, resource_id=config.storage_inventory_tap_resource_id
+                )
+                await self._query_client._init(
+                    config.storage_inventory_tap_resource_id, self._subject, insecure=False
                 )
 
 
@@ -270,13 +274,14 @@ def data_get(client, working_directory, file_name, archive, metrics):
     metrics.observe(start, end, file_size, 'get', 'data', file_name)
 
 
-def declare_client(config, metrics=None):
+async def declare_client(config, metrics=None):
     """Common code to set the client used for interacting with CADC
     storage."""
     subject = define_subject(config)
     cadc_client = StorageClientWrapper(
         resource_id=config.storage_inventory_resource_id, subject=subject, metrics=metrics
     )
+    await cadc_client._init(subject, config.storage_inventory_resource_id)
     return cadc_client
 
 
