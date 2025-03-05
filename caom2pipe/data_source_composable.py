@@ -708,6 +708,7 @@ class LocalFilesDataSourceRunnerMeta(LocalFilesDataSource):
         self._temp_storage_name = None
 
     def _append_work(self, prev_exec_dt, exec_dt, entry_path):
+        self._logger.debug(f'Begin _append_work with {entry_path}')
         with os.scandir(entry_path) as dir_listing:
             for dir_entry in dir_listing:
                 if dir_entry.is_dir() and self._recursive:
@@ -730,17 +731,19 @@ class LocalFilesDataSourceRunnerMeta(LocalFilesDataSource):
                             if self.default_filter(dir_entry):
                                 self._temp[entry_st_mtime_dt].append(self._temp_storage_name)
                                 self._temp_storage_name = None
+        self._logger.debug('End _append_work')
 
     def _find_work(self, entry_path):
+        self._logger.debug(f'Begin _find_work with {entry_path}')
         with os.scandir(entry_path) as dir_listing:
             for entry in dir_listing:
                 if entry.is_dir() and self._recursive:
                     self._find_work(entry.path)
                 else:
                     if self.default_filter(entry):
-                        self._logger.info(f'Adding {entry.path} to work list.')
                         self._work.append(self._temp_storage_name)
                         self._temp_storage_name = None
+        self._logger.debug('End _find_work')
 
     def _is_remote_different(self, index, entry):
         """
@@ -807,56 +810,57 @@ class LocalFilesDataSourceRunnerMeta(LocalFilesDataSource):
         """
         :param dir_entry: os.DirEntry
         """
+        self._logger.debug(f'Begin default_filter for {dir_entry}')
         work_with_file = True
-        if super().default_filter(dir_entry):
-            if dir_entry.name.startswith('.'):
-                # skip dot files
-                work_with_file = False
-            else:
-                self._temp_storage_name = self._storage_name_ctor(source_names=[dir_entry.path])
-                local_file_info = get_local_file_info(dir_entry.path)
-                index = 0
-                self._temp_storage_name.set_file_info(index, local_file_info)
-                if '.hdf5' in dir_entry.name:
-                    # no hdf5 validation
-                    pass
-                elif self._verify_file(dir_entry.path):
-                    # only work with files that pass the FITS verification
-                    if self._cleanup_when_storing:
-                        if self._store_modified_files_only:
-                            # only transfer files with a different MD5 checksum
-                            work_with_file = self._is_remote_different(index, self._temp_storage_name)
-                            if not work_with_file:
-                                self._logger.warning(
-                                    f'{dir_entry.path} has the same md5sum at CADC. Not transferring.'
-                                )
-                                # KW - 23-06-21
-                                # if the file already exists, with the same checksum, at CADC, Kanoa says move it to the
-                                # 'succeeded' directory.
-                                self._skipped_files += 1
-                                self._move_action(dir_entry.path, self._cleanup_success_directory)
-                                self._reporter.capture_success(
-                                    self._temp_storage_name.obs_id,
-                                    self._temp_storage_name.file_name,
-                                    datetime.now(tz=timezone.utc).timestamp(),
-                                )
-                                self._temp_storage_name = None
-                    else:
-                        work_with_file = True
-                else:
-                    self._rejected_files += 1
-                    if self._cleanup_when_storing:
-                        self._logger.warning(
-                            f'Rejecting {dir_entry.path}. Moving to {self._cleanup_failure_directory}'
-                        )
-                        self._move_action(dir_entry.path, self._cleanup_failure_directory)
-                    self._reporter.capture_failure(
-                        self._temp_storage_name, BaseException('_verify_file errors'), '_verify_file errors'
-                    )
-                    work_with_file = False
-                    self._temp_storage_name = None
-        else:
+        # if super().default_filter(dir_entry):
+        if dir_entry.name.startswith('.'):
+            # skip dot files
             work_with_file = False
+        else:
+            self._temp_storage_name = self._storage_name_ctor(source_names=[dir_entry.path])
+            local_file_info = get_local_file_info(dir_entry.path)
+            index = 0
+            self._temp_storage_name.set_file_info(index, local_file_info)
+            if '.hdf5' in dir_entry.name:
+                # no hdf5 validation
+                pass
+            elif self._verify_file(dir_entry.path):
+                # only work with files that pass the FITS verification
+                if self._cleanup_when_storing:
+                    if self._store_modified_files_only:
+                        # only transfer files with a different MD5 checksum
+                        work_with_file = self._is_remote_different(index, self._temp_storage_name)
+                        if not work_with_file:
+                            self._logger.warning(
+                                f'{dir_entry.path} has the same md5sum at CADC. Not transferring.'
+                            )
+                            # KW - 23-06-21
+                            # if the file already exists, with the same checksum, at CADC, Kanoa says move it to the
+                            # 'succeeded' directory.
+                            self._skipped_files += 1
+                            self._move_action(dir_entry.path, self._cleanup_success_directory)
+                            self._reporter.capture_success(
+                                self._temp_storage_name.obs_id,
+                                self._temp_storage_name.file_name,
+                                datetime.now(tz=timezone.utc).timestamp(),
+                            )
+                            self._temp_storage_name = None
+                else:
+                    work_with_file = True
+            else:
+                self._rejected_files += 1
+                if self._cleanup_when_storing:
+                    self._logger.warning(
+                        f'Rejecting {dir_entry.path}. Moving to {self._cleanup_failure_directory}'
+                    )
+                    self._move_action(dir_entry.path, self._cleanup_failure_directory)
+                self._reporter.capture_failure(
+                    self._temp_storage_name, BaseException('_verify_file errors'), '_verify_file errors'
+                )
+                work_with_file = False
+                self._temp_storage_name = None
+        # else:
+        #     work_with_file = False
         self._logger.debug(f'Done default_filter says work_with_file is {work_with_file} for {dir_entry.path}')
         return work_with_file
 
