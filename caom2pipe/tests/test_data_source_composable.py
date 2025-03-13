@@ -2,7 +2,7 @@
 # ******************  CANADIAN ASTRONOMY DATA CENTRE  *******************
 # *************  CENTRE CANADIEN DE DONNÉES ASTRONOMIQUES  **************
 #
-#  (c) 2019.                            (c) 2019.
+#  (c) 2025.                            (c) 2025.
 #  Government of Canada                 Gouvernement du Canada
 #  National Research Council            Conseil national de recherches
 #  Ottawa, Canada, K1A 0R6              Ottawa, Canada, K1A 0R6
@@ -397,6 +397,174 @@ def test_transfer_check_fits_verify(test_config, tmp_path, change_test_dir):
         for test_entry in test_result:
             # execution result == -1, execution failed, so delay clean-up
             test_subject.clean_up(test_entry, -1, current_count=0)
+        assert not test_correct_file.exists(), 'correct file at source'
+        assert not moved_success.exists(), 'correct file at destination'
+        assert moved_failure.exists(), 'correct file at destination'
+
+        # dot file - which should be ignored
+        assert test_dot_file.exists(), 'correct file at source'
+        moved = Path(test_success_directory, test_dot_file.name)
+        assert not moved.exists(), 'dot file at success destination'
+        moved = Path(test_failure_directory, test_dot_file.name)
+        assert not moved.exists(), 'dot file at failure destination'
+        assert test_reporter.all == 5, f'wrong all {test_reporter._summary}'
+        assert test_reporter._summary._skipped_sum == 2, f'wrong skipped {test_reporter._summary}'
+        assert test_reporter._summary._rejected_sum == 2, f'wrong rejected {test_reporter._summary}'
+
+    def _at_cadc(test_start_ts, test_end_ts):
+        test_config.cleanup_files_when_storing = False
+        cadc_client_mock = Mock(autospec=True)
+        cadc_client_mock.info.side_effect = mock_info
+        test_reporter = mc.ExecutionReporter(test_config, observable=Mock(autospec=True))
+        test_subject = dsc.LocalFilesDataSource(test_config, cadc_client_mock, test_reader)
+        test_subject.reporter = test_reporter
+        assert test_subject is not None, 'expect construction to work'
+        test_result = test_subject.get_time_box_work(test_start_ts, test_end_ts)
+        assert len(test_result) == 3, 'wrong number of results returned'
+        assert test_result[0].entry_name == f'{tmp_path}/cfht_source/correct.fits.gz', 'wrong result'
+        assert test_result[1].entry_name == f'{tmp_path}/cfht_source/same_file.fits', 'wrong result'
+        assert test_result[2].entry_name == f'{tmp_path}/cfht_source/already_successful.fits', 'wrong result'
+        for f in [test_empty_file, test_broken_file, test_correct_file, test_dot_file, test_same_file]:
+            assert f.exists(), 'file at source'
+            moved = Path(test_failure_directory, f.name)
+            assert not moved.exists(), 'file at destination'
+        # clean up should do nothing
+        for test_entry in test_result:
+            # execution result == -1, execution failed, so delay clean-up
+            test_subject.clean_up(test_entry, -1, current_count=0)
+        for f in [test_empty_file, test_broken_file, test_correct_file, test_dot_file, test_same_file]:
+            assert f.exists(), 'file at source'
+            moved = Path(test_failure_directory, f.name)
+            assert not moved.exists(), 'file at destination'
+        assert test_reporter.all == 5, 'wrong report'
+        assert test_reporter._summary._skipped_sum == 0, f'wrong skipped {test_reporter._summary}'
+        assert test_reporter._summary._rejected_sum == 2, f'wrong rejected {test_reporter._summary}'
+
+    def _move_failure(test_start_ts, test_end_ts):
+        def _move_mock():
+            raise mc.CadcException('move mock')
+
+        move_orig = shutil.move
+        shutil.move = Mock(side_effect=_move_mock)
+        try:
+            test_config.cleanup_files_when_storing = True
+            test_config.task_types = [mc.TaskType.STORE]
+            cadc_client_mock = Mock(autospec=True)
+            cadc_client_mock.info.side_effect = mock_info
+            test_reporter = mc.ExecutionReporter(test_config, observable=Mock(autospec=True))
+            test_subject = dsc.LocalFilesDataSource(test_config, cadc_client_mock, test_reader)
+            test_subject.reporter = test_reporter
+            with pytest.raises(mc.CadcException):
+                test_result = test_subject.get_time_box_work(test_start_ts, test_end_ts)
+            assert test_reporter.all == 0, 'wrong report'
+            assert test_reporter._summary._skipped_sum == 0, f'wrong skipped {test_reporter._summary}'
+            assert test_reporter._summary._rejected_sum == 0, f'wrong rejected {test_reporter._summary}'
+        finally:
+            shutil.move = move_orig
+
+    for test in [_at_cfht, _at_cadc, _move_failure]:
+        for entry in [test_failure_directory, test_success_directory, test_source_directory]:
+            if not entry.exists():
+                entry.mkdir()
+            for child in entry.iterdir():
+                child.unlink()
+        for entry in [test_empty_file, test_dot_file]:
+            entry.touch()
+        for source in [test_broken_source, test_correct_source, test_same_source, test_already_successful_source]:
+            shutil.copy(source, test_source_directory)
+
+        # CFHT test case - try to move a file that would have the effect
+        # of replacing a file already in the destination directory
+        shutil.copy(test_already_successful_source, test_success_directory)
+
+        test_config.change_working_directory(tmp_path.as_posix())
+        test_config.use_local_files = True
+        test_config.data_sources = [test_source_directory.as_posix()]
+        test_config.data_source_extensions = ['.fits', '.fits.gz', '.fits.fz']
+        test_config.cleanup_success_destination = test_success_directory.as_posix()
+        test_config.cleanup_failure_destination = test_failure_directory.as_posix()
+        test_config.store_modified_files_only = True
+
+        test(test_start_time, test_end_time)
+
+
+def test_transfer_check_fits_verify_runner_meta(test_config, tmp_path, change_test_dir):
+    # this is a duplicate of test_transfer_check_fits_verify, remove one or the other when
+    # the LocalFilesDataSourceRunnerMeta and LocalFilesDataSource classes are merged into one
+
+    # how things should probably work at CFHT
+    delta = timedelta(minutes=30)
+    # half an hour ago
+    test_start_time = datetime.now() - delta
+    # half an hour from now
+    test_end_time = test_start_time + delta + delta
+    test_source_directory = Path(f'{tmp_path}/cfht_source')
+    test_failure_directory = Path(f'{tmp_path}/cfht_transfer_failure')
+    test_success_directory = Path(f'{tmp_path}/cfht_transfer_success')
+    test_empty_file = Path(f'{tmp_path}/cfht_source/empty_file.fits.fz')
+    test_broken_file = Path(f'{tmp_path}/cfht_source/broken.fits')
+    test_correct_file = Path(f'{tmp_path}/cfht_source/correct.fits.gz')
+    test_dot_file = Path(f'{tmp_path}/cfht_source/.dot_file.fits')
+    test_same_file = Path(f'{tmp_path}/cfht_source/same_file.fits')
+    test_broken_source = Path('/test_files/broken.fits')
+    test_correct_source = Path('/test_files/correct.fits.gz')
+    test_same_source = Path('/test_files/same_file.fits')
+    test_already_successful_source = Path('/test_files/already_successful.fits')
+    test_reader = rdc.FileMetadataReader()
+
+    def mock_info(uri):
+        return FileInfo(
+            id=uri,
+            size=12,
+            md5sum='e4e153121805745792991935e04de322',
+        )
+
+    def _at_cfht(test_start_ts, test_end_ts):
+        test_config.cleanup_files_when_storing = True
+        test_config.task_types = [mc.TaskType.STORE]
+        test_config.retry_failures = False
+        cadc_client_mock = Mock(autospec=True)
+        cadc_client_mock.info.side_effect = mock_info
+        test_reporter = mc.ExecutionReporter(test_config, observable=Mock(autospec=True))
+        test_subject = dsc.LocalFilesDataSourceRunnerMeta(
+            test_config,
+            cadc_client_mock,
+            test_config.recurse_data_sources,
+            scheme='cadc',
+            storage_name_ctor=mc.StorageName,
+        )
+        test_subject.reporter = test_reporter
+
+        assert test_subject is not None, 'expect construction to work'
+        test_result = test_subject.get_time_box_work(test_start_ts, test_end_ts)
+        assert len(test_result) == 1, 'wrong number of results returned'
+        assert test_result[0].storage_entry.source_names[0] == f'{tmp_path}/cfht_source/correct.fits.gz', 'wrong result'
+
+        for e in [test_empty_file, test_broken_file]:
+            # both should fail the ac.check_fits call
+            assert not e.exists(), f'file at source {e}'
+            moved = Path(test_failure_directory, e.name)
+            assert moved.exists(), f'file at destination {e}'
+
+        # same file has been moved
+        assert not test_same_file.exists(), 'same file at source'
+        moved = Path(test_success_directory, test_same_file.name)
+        assert moved.exists(), 'same file at destination'
+
+        # correct file - the file stays where it is until it's transferred
+        assert test_correct_file.exists(), 'correct file at source'
+        moved_success = Path(test_success_directory, test_correct_file.name)
+        moved_failure = Path(test_failure_directory, test_correct_file.name)
+        assert not moved_success.exists(), 'correct file at success'
+        assert not moved_failure.exists(), 'correct file at failure'
+        assert test_reporter.all == 5, f'wrong all {test_reporter._summary}'
+        assert test_reporter._summary._skipped_sum == 2, f'wrong skipped {test_reporter._summary}'
+        assert test_reporter._summary._rejected_sum == 2, f'wrong rejected {test_reporter._summary}'
+
+        # and after the transfer
+        for test_entry in test_result:
+            # execution result == -1, execution failed, so delay clean-up
+            test_subject.clean_up(test_entry.storage_entry, -1, current_count=0)
         assert not test_correct_file.exists(), 'correct file at source'
         assert not moved_success.exists(), 'correct file at destination'
         assert moved_failure.exists(), 'correct file at destination'

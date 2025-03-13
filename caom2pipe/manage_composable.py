@@ -2,7 +2,7 @@
 # ******************  CANADIAN ASTRONOMY DATA CENTRE  *******************
 # *************  CENTRE CANADIEN DE DONNÉES ASTRONOMIQUES  **************
 #
-#  (c) 2018.                            (c) 2018.
+#  (c) 2025.                            (c) 2025.
 #  Government of Canada                 Gouvernement du Canada
 #  National Research Council            Conseil national de recherches
 #  Ottawa, Canada, K1A 0R6              Ottawa, Canada, K1A 0R6
@@ -2245,7 +2245,7 @@ class StorageName:
 
     Lifecycle of a StorageName
        1. Created when a unit of work is identified
-       2. FileInfo - as lazy as possible
+       2. FileInfo - as lazy as possible, and representing the DataSource
        3. Header metadata - as lazy as possible
        4. Removed from the list of work when it’s (successfully? TODO - decide the optimal removal time ) done
           processing

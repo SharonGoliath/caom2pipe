@@ -2,7 +2,7 @@
 # ******************  CANADIAN ASTRONOMY DATA CENTRE  *******************
 # *************  CENTRE CANADIEN DE DONNÉES ASTRONOMIQUES  **************
 #
-#  (c) 2019.                            (c) 2019.
+#  (c) 2025.                            (c) 2025.
 #  Government of Canada                 Gouvernement du Canada
 #  National Research Council            Conseil national de recherches
 #  Ottawa, Canada, K1A 0R6              Ottawa, Canada, K1A 0R6
@@ -812,55 +812,55 @@ class LocalFilesDataSourceRunnerMeta(LocalFilesDataSource):
         """
         self._logger.debug(f'Begin default_filter for {dir_entry}')
         work_with_file = True
-        # if super().default_filter(dir_entry):
-        if dir_entry.name.startswith('.'):
-            # skip dot files
-            work_with_file = False
-        else:
-            self._temp_storage_name = self._storage_name_ctor(source_names=[dir_entry.path])
-            local_file_info = get_local_file_info(dir_entry.path)
-            index = 0
-            self._temp_storage_name.set_file_info(index, local_file_info)
-            if '.hdf5' in dir_entry.name:
-                # no hdf5 validation
-                pass
-            elif self._verify_file(dir_entry.path):
-                # only work with files that pass the FITS verification
-                if self._cleanup_when_storing:
-                    if self._store_modified_files_only:
-                        # only transfer files with a different MD5 checksum
-                        work_with_file = self._is_remote_different(index, self._temp_storage_name)
-                        if not work_with_file:
-                            self._logger.warning(
-                                f'{dir_entry.path} has the same md5sum at CADC. Not transferring.'
-                            )
-                            # KW - 23-06-21
-                            # if the file already exists, with the same checksum, at CADC, Kanoa says move it to the
-                            # 'succeeded' directory.
-                            self._skipped_files += 1
-                            self._move_action(dir_entry.path, self._cleanup_success_directory)
-                            self._reporter.capture_success(
-                                self._temp_storage_name.obs_id,
-                                self._temp_storage_name.file_name,
-                                datetime.now(tz=timezone.utc).timestamp(),
-                            )
-                            self._temp_storage_name = None
-                else:
-                    work_with_file = True
-            else:
-                self._rejected_files += 1
-                if self._cleanup_when_storing:
-                    self._logger.warning(
-                        f'Rejecting {dir_entry.path}. Moving to {self._cleanup_failure_directory}'
-                    )
-                    self._move_action(dir_entry.path, self._cleanup_failure_directory)
-                self._reporter.capture_failure(
-                    self._temp_storage_name, BaseException('_verify_file errors'), '_verify_file errors'
-                )
+        if DataSource.default_filter(self, dir_entry):
+            if dir_entry.name.startswith('.'):
+                # skip dot files
                 work_with_file = False
-                self._temp_storage_name = None
-        # else:
-        #     work_with_file = False
+            else:
+                self._temp_storage_name = self._storage_name_ctor(source_names=[dir_entry.path])
+                local_file_info = get_local_file_info(dir_entry.path)
+                index = 0
+                self._temp_storage_name.set_file_info(index, local_file_info)
+                if '.hdf5' in dir_entry.name:
+                    # no hdf5 validation
+                    pass
+                elif self._verify_file(dir_entry.path):
+                    # only work with files that pass the FITS verification
+                    if self._cleanup_when_storing:
+                        if self._store_modified_files_only:
+                            # only transfer files with a different MD5 checksum
+                            work_with_file = self._is_remote_different(index, self._temp_storage_name)
+                            if not work_with_file:
+                                self._logger.warning(
+                                    f'{dir_entry.path} has the same md5sum at CADC. Not transferring.'
+                                )
+                                # KW - 23-06-21
+                                # if the file already exists, with the same checksum, at CADC, Kanoa says move it to the
+                                # 'succeeded' directory.
+                                self._skipped_files += 1
+                                self._move_action(dir_entry.path, self._cleanup_success_directory)
+                                self._reporter.capture_success(
+                                    self._temp_storage_name.obs_id,
+                                    self._temp_storage_name.file_name,
+                                    datetime.now(tz=timezone.utc).timestamp(),
+                                )
+                                self._temp_storage_name = None
+                    else:
+                        work_with_file = True
+                else:
+                    self._rejected_files += 1
+                    if self._cleanup_when_storing:
+                        self._logger.warning(
+                            f'Rejecting {dir_entry.path}. Moving to {self._cleanup_failure_directory}'
+                        )
+                        self._move_action(dir_entry.path, self._cleanup_failure_directory)
+                    self._reporter.capture_failure(
+                        self._temp_storage_name, BaseException('_verify_file errors'), '_verify_file errors'
+                    )
+                    work_with_file = False
+                    self._temp_storage_name = None
+        else:
+            work_with_file = False
         self._logger.debug(f'Done default_filter says work_with_file is {work_with_file} for {dir_entry.path}')
         return work_with_file
 
@@ -887,8 +887,7 @@ class LocalFilesDataSourceRunnerMeta(LocalFilesDataSource):
 
 class TodoFileDataSource(DataSource):
     """
-    Implements the identification of the work to be done, by reading the
-    contents of a file.
+    Implements the identification of the work to be done, by reading the contents of a file.
     """
 
     def __init__(self, config):
@@ -911,8 +910,7 @@ class TodoFileDataSource(DataSource):
 
 class TodoFileDataSourceRunnerMeta(DataSource):
     """
-    Implements the identification of the work to be done, by reading the
-    contents of a file.
+    Implements the identification of the work to be done, by reading the contents of a file.
     """
 
     def __init__(self, config, storage_name_ctor):
@@ -1335,6 +1333,103 @@ class VaultCleanupDataSource(VaultDataSource):
                 self._logger.error(f'Failed to move {fqn} to {destination}')
                 raise mc.CadcException(e)
         self._logger.debug('End _move_action')
+
+
+class VaultCleanupDataSourceRunnerMeta(VaultCleanupDataSource):
+    """
+    This implementation will clean up a vos: data source.
+
+    This is a temporary class while refactoring all the *2caom2 apps for RunnerMeta, and will eventually replace
+    VaultCleanupDataSource.
+    """
+
+    def __init__(self, config, vault_client, cadc_client, storage_name_ctor=mc.StorageName):
+        super().__init__(
+            config, vault_client, cadc_client, metadata_reader=None, storage_name_ctor=storage_name_ctor
+        )
+        self._temp_storage_name = None
+
+    def clean_up(self, entry, execution_result, current_count):
+        """
+        Move file to the success or failure location, depending on whether a file with the same checksum is at CADC.
+        """
+        self._logger.debug(f'Begin clean_up with {entry}')
+        can_clean = self.can_clean_up(execution_result, current_count)
+        if self._cleanup_when_storing and can_clean:
+            for index, source_name in enumerate(entry.source_names):
+                if self._is_remote_different(index, entry):
+                    # the transfer itself failed, so track as a failure
+                    self._move_action(source_name, self._cleanup_failure_directory)
+                    can_clean = True
+                else:
+                    self._move_action(source_name, self._cleanup_success_directory)
+                    can_clean = True
+        self._logger.debug(f'End clean_up. Clean up for {entry.file_uri} is {can_clean}.')
+        return can_clean
+
+    def default_filter(self, dir_entry):
+        """
+        :param dir_entry: either an str that is a vos URI, or a vos.Node
+        """
+        dir_entry_fqn = dir_entry
+        if not isinstance(dir_entry, str):
+            dir_entry_fqn = dir_entry.uri
+        self._logger.debug(f'Begin default_filter with {dir_entry_fqn}')
+        copy_file = False
+        for extension in self._extensions:
+            if dir_entry_fqn.endswith(extension):
+                copy_file = True
+                if os.path.basename(dir_entry_fqn).startswith('.'):
+                    # skip dot files
+                    copy_file = False
+                else:
+                    self._temp_storage_name = self._storage_name_ctor(source_names=[dir_entry_fqn])
+                    vault_file_info = clc.vault_info(self._vault_client, dir_entry_fqn)
+                    self._temp_storage_name.file_info = {self._temp_storage_name.file_uri: vault_file_info}
+                    if vault_file_info.size == 0:
+                        self._logger.info(f'Skipping 0-length {dir_entry_fqn}')
+                        copy_file = False
+                    elif self._store_modified_files_only:
+                        # only transfer files with a different MD5 checksum
+                        copy_file = self._is_remote_different(0, self._temp_storage_name)
+                        if not copy_file:
+                            self._skipped_files += 1
+                            self._move_action(dir_entry_fqn, self._cleanup_success_directory)
+                            self._reporter.capture_success(
+                                dir_entry_fqn,
+                                os.path.basename(dir_entry_fqn),
+                                datetime.now(tz=timezone.utc).timestamp(),
+                            )
+                break
+        self._logger.debug(f'Done default_filter says copy_file is {copy_file} for {dir_entry_fqn}')
+        return copy_file
+
+    def _is_remote_different(self, index, entry):
+        """
+        :param destination_uri: str CADC storage system URI
+        """
+        self._logger.debug(f'Begin _is_remote_different {entry.destination_uris[index]}')
+        result = True
+        # get the metadata at CADC
+        cadc_meta = self._cadc_client.info(entry.destination_uris[index])
+        if cadc_meta is not None and entry.file_info[entry.destination_uris[index]].md5sum == cadc_meta.md5sum:
+            self._logger.warning(f'{entry.destination_uris[index]} has the same md5sum at CADC.')
+            result = False
+        self._logger.debug(f'End _is_remote_different {result}')
+        return result
+
+    def _find_work(self, entry):
+        # dir_listing is a list of str
+        dir_listing = self._vault_client.listdir(entry)
+        for dir_entry in dir_listing:
+            dir_entry_fqn = f'{entry}/{dir_entry}'
+            if self._vault_client.isdir(dir_entry_fqn) and self._recursive:
+                self._find_work(dir_entry_fqn)
+            else:
+                if self.default_filter(dir_entry_fqn):
+                    self._logger.info(f'Adding {dir_entry_fqn} to work list.')
+                    self._work.append(self._temp_storage_name)
+                self._temp_storage_name = None
 
 
 def data_source_factory(config, clients, state, reader, reporter):
