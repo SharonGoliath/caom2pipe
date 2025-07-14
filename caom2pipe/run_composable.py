@@ -1006,7 +1006,7 @@ def run_by_todo_runner_meta(
     organizer_class_name='OrganizeExecutesRunnerMeta',
     reporter=None,
     needs_delete=False,
-    storage_name_ctor=None,
+    storage_name_ctor=mc.StorageName,
 ):
     """A default implementation for using the TodoRunner.
 

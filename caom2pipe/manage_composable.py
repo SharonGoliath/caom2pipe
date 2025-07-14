@@ -1192,6 +1192,7 @@ class Config:
         self._meta_read_groups = []
         self._data_sources = []
         self._data_source_extensions = ['.fits']
+        self._data_source_globs = ['*.fits']
         self._recurse_data_sources = True
         self._features = Features()
         self._cleanup_failure_destination = None
@@ -1267,6 +1268,15 @@ class Config:
     @data_source_extensions.setter
     def data_source_extensions(self, value):
         self._data_source_extensions = value
+
+    @property
+    def data_source_globs(self):
+        """glob.glob patterns for naming files in a directory."""
+        return self._data_source_globs
+
+    @data_source_globs.setter
+    def data_source_globs(self, value):
+        self._data_source_globs = value
 
     @property
     def collection(self):
@@ -1745,6 +1755,7 @@ class Config:
             f'  data_read_groups:: {self.data_read_groups}\n'
             f'  data_sources:: {self.data_sources}\n'
             f'  data_source_extensions:: {self.data_source_extensions}\n'
+            f'  data_source_globs:: {self.data_source_globs}\n'
             f'  dump_blueprint:: {self.dump_blueprint}\n'
             f'  failure_fqn:: {self.failure_fqn}\n'
             f'  failure_log_file_name:: {self.failure_log_file_name}\n'
@@ -1874,6 +1885,7 @@ class Config:
             self.work_file = config.get('todo_file_name', 'todo.txt')
             self.data_sources = Config._obtain_list('data_sources', config, [])
             self.data_source_extensions = Config._obtain_list('data_source_extensions', config, ['.fits'])
+            self.data_source_globs = Config._obtain_list('data_source_globs', config, ['*.fits'])
             self.resource_id = config.get('resource_id', 'ivo://cadc.nrc.ca/sc2repo')
             self.tap_id = config.get('tap_id', 'ivo://cadc.nrc.ca/sc2tap')
             self.use_local_files = bool(config.get('use_local_files', False))
