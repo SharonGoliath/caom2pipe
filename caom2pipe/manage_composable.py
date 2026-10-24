@@ -1775,6 +1775,7 @@ class Config:
         return (
             # f'\nFrom {os.getcwd()}/config.yml:\n'
             f'\n'
+            f'  bookmark:: {self.bookmark}\n'
             f'  cache_fqn:: {self.cache_fqn}\n'
             f'  cleanup_failure_destination:: {self.cleanup_failure_destination}\n'
             f'  cleanup_files_when_storing:: {self.cleanup_files_when_storing}\n'
@@ -2414,10 +2415,6 @@ class StorageName:
     @property
     def name(self):
         return self._obs_id if self._obs_id is not None else self._file_id
-
-    @property
-    def namespace(self):
-        return self._namespace
 
     @property
     def prev(self):

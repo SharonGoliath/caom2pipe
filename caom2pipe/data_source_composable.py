@@ -1233,6 +1233,35 @@ class VaultDataSource(ListDirTimeBoxDataSource):
         return False
 
 
+class VaultDataSourceRunnerMeta(VaultDataSource):
+    """
+    This implementation will identify the work to be done, by doing a directory
+    listing on VOSpace.
+
+    It will return instances of StorageName specializations in the list of work.
+
+    This is a temporary class while refactoring all the *2caom2 apps for RunnerMeta, and will eventually replace
+    VaultDataSource.
+    """
+
+    def __init__(self, vault_client, config, storage_name_ctor):
+        super().__init__(vault_client, config)
+        self._storage_name_ctor = storage_name_ctor
+
+    def _find_work(self, source_directory, work):
+        node = self._vault_client.get_node(source_directory, limit=None, force=True)
+        while node.type == 'vos:LinkNode':
+            uri = node.target
+            node = self._vault_client.get_node(uri, limit=None, force=True)
+        for entry in node.node_list:
+            if entry.type == 'vos:ContainerNode' and self._recursive:
+                self._find_work(entry.uri, work)
+            else:
+                if self.default_filter(entry):
+                    self._logger.info(f'Add {entry.uri} to work list.')
+                    work.append(self._storage_name_ctor(source_names=[entry.uri]))
+
+
 class VaultCleanupDataSource(VaultDataSource):
     """
     This implementation will clean up a vos: data source.
@@ -1400,9 +1429,7 @@ class VaultCleanupDataSourceRunnerMeta(VaultCleanupDataSource):
     """
 
     def __init__(self, config, vault_client, cadc_client, storage_name_ctor=mc.StorageName):
-        super().__init__(
-            config, vault_client, cadc_client, metadata_reader=None, storage_name_ctor=storage_name_ctor
-        )
+        super().__init__(config, vault_client, cadc_client, metadata_reader=None, storage_name_ctor=storage_name_ctor)
         self._temp_storage_name = None
 
     def clean_up(self, entry, execution_result, current_count):
