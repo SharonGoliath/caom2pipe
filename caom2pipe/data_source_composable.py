@@ -833,6 +833,18 @@ class LocalFilesDataSourceRunnerMeta(LocalFilesDataSource):
         )
         return result
 
+    def _verify_file(self, fqn):
+        """
+        Check file content for correctness, by whatever rules the file needs to conform to. The default
+        implementation is for FITS files only.
+
+        :param fqn: str fully-qualified file name
+        :return: True if the file passes the check, False otherwise
+        """
+        if '.fits' in fqn:
+            return ac.check_fitsverify(fqn)
+        return True
+
     def clean_up(self, entry, execution_result, current_count=0):
         """
         Move a file to the success or failure location. The success location is for when a file with the same
@@ -867,6 +879,7 @@ class LocalFilesDataSourceRunnerMeta(LocalFilesDataSource):
         """
         :param dir_entry: os.DirEntry
         """
+        self._logger.debug(f'Begin default_filter with {dir_entry}')
         work_with_file = True
         if DataSource.default_filter(self, dir_entry):
             if dir_entry.name.startswith('.'):
